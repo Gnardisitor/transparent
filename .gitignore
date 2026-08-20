@@ -1,0 +1,11 @@
+build/
+
+# vcpkg is a git submodule (see .gitmodules) — its working tree is a
+# separate repository the outer repo never descends into, so its build
+# artifacts don't need excluding here. This only catches the case where
+# vcpkg's manifest-mode install lands outside build/.
+vcpkg_installed/
+
+# Model weights are fetched at CMake configure time (see models/CMakeLists.txt)
+# into the build directory, not committed — so nothing model-specific needs
+# excluding here beyond build/ above.
