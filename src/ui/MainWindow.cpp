@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "core/ImageFormats.h"
+#include "ui/SpinnerWidget.h"
 
 #include <QAction>
 #include <QApplication>
@@ -19,11 +20,12 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
+#include <QResizeEvent>
 #include <QSignalBlocker>
-#include <QStackedWidget>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+#include <QtConcurrentRun>
 
 #include <optional>
 
@@ -54,8 +56,8 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
             this, QStringLiteral("About transparent"),
             QStringLiteral(
                 "<h3>transparent</h3>"
-                "<p>Local, GPU-accelerated background removal and image upscaling for Linux. "
-                "No cloud calls, no subscriptions, no telemetry.</p>"
+                "<p>Local, GPU-accelerated background removal, image upscaling, and bokeh "
+                "for Linux. No cloud calls, no subscriptions, no telemetry.</p>"
                 "<p>By Dragos Bajanica.</p>"
                 "<p>Licensed under the GNU General Public License v3 (GPLv3). "
                 "Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, "
@@ -118,15 +120,31 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
     }
     layout->addWidget(statusLabel_);
 
-    modeStack_ = new QStackedWidget(this);
-    modeStack_->addWidget(buildSimplePage());
-    modeStack_->addWidget(buildAdvancedPage());
-    layout->addWidget(modeStack_);
+    // Shown/hidden directly rather than via QStackedWidget: Simple mode has
+    // no page body of its own (its only control is the dropdown above), and
+    // a QStackedWidget always reserves space for its *largest* page even
+    // while showing a smaller one — which left a big empty gap under the
+    // top row in Simple mode, since it was sized to fit Advanced's list.
+    advancedPage_ = buildAdvancedPage();
+    advancedPage_->setVisible(false);
+    layout->addWidget(advancedPage_);
 
     previewLabel_ = new QLabel(this);
     previewLabel_->setAlignment(Qt::AlignCenter);
     previewLabel_->setMinimumSize(400, 300);
     previewLabel_->setFrameShape(QFrame::StyledPanel);
+
+    // Floating "remove image" badge and busy spinner over the preview,
+    // repositioned on every resize/preview update since previewLabel_'s
+    // size isn't known until first shown.
+    clearButton_ = new QPushButton(QStringLiteral("✕"), previewLabel_);
+    clearButton_->setFixedSize(24, 24);
+    clearButton_->setToolTip(QStringLiteral("Remove image"));
+    clearButton_->setVisible(false);
+    connect(clearButton_, &QPushButton::clicked, this, &MainWindow::onClearImageClicked);
+
+    spinner_ = new SpinnerWidget(previewLabel_);
+    spinner_->setVisible(false);
 
     exportButton_ = new QPushButton(QStringLiteral("Export PNG..."), this);
     exportButton_->setEnabled(false);
@@ -136,12 +154,13 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
     layout->addWidget(exportButton_);
 
     setCentralWidget(central);
-}
 
-QWidget* MainWindow::buildSimplePage() {
-    // Simple mode's only control (the operation dropdown) lives in the top
-    // mode row instead, so this page intentionally has no body content.
-    return new QWidget(this);
+    // Pipeline steps (background removal, upscaling, ...) run real GPU/CPU
+    // inference that can take seconds; running that on the GUI thread froze
+    // the whole window (no repainting) for the duration. QtConcurrent::run
+    // moves the work off-thread; this watcher picks up the result.
+    connect(&processingWatcher_, &QFutureWatcher<QImage>::finished, this,
+            &MainWindow::onProcessingFinished);
 }
 
 QWidget* MainWindow::buildAdvancedPage() {
@@ -167,9 +186,10 @@ QWidget* MainWindow::buildAdvancedPage() {
     pageLayout->addWidget(advancedStepList_);
     populateAdvancedStepList();
 
-    auto* startButton = new QPushButton(QStringLiteral("Start Processing"), page);
-    connect(startButton, &QPushButton::clicked, this, &MainWindow::onStartProcessingClicked);
-    pageLayout->addWidget(startButton);
+    startProcessingButton_ = new QPushButton(QStringLiteral("Start Processing"), page);
+    connect(startProcessingButton_, &QPushButton::clicked, this,
+            &MainWindow::onStartProcessingClicked);
+    pageLayout->addWidget(startProcessingButton_);
 
     return page;
 }
@@ -205,7 +225,7 @@ std::vector<size_t> MainWindow::currentAdvancedStepOrder() const {
 }
 
 void MainWindow::onModeChanged(int index) {
-    modeStack_->setCurrentIndex(index);
+    advancedPage_->setVisible(index == 1);
     operationCombo_->setVisible(index == 0);
 
     if (index == 1) {
@@ -242,7 +262,32 @@ void MainWindow::onModeChanged(int index) {
     }
 }
 
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    repositionOverlays();
+}
+
+void MainWindow::repositionOverlays() {
+    const int margin = 8;
+    clearButton_->move(previewLabel_->width() - clearButton_->width() - margin, margin);
+    spinner_->move((previewLabel_->width() - spinner_->width()) / 2,
+                   (previewLabel_->height() - spinner_->height()) / 2);
+}
+
+void MainWindow::setControlsEnabled(bool enabled) {
+    modeCombo_->setEnabled(enabled);
+    operationCombo_->setEnabled(enabled);
+    advancedStepList_->setEnabled(enabled);
+    startProcessingButton_->setEnabled(enabled);
+    if (!enabled) {
+        exportButton_->setEnabled(false);
+    }
+}
+
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
+    if (processing_) {
+        return;
+    }
     const QMimeData* mime = event->mimeData();
     if (!mime->hasUrls() || !mime->urls().first().isLocalFile()) {
         return;
@@ -275,6 +320,10 @@ void MainWindow::dropEvent(QDropEvent* event) {
 }
 
 void MainWindow::loadImage(const QString& path) {
+    if (processing_) {
+        return;
+    }
+
     QImage source(path);
     if (source.isNull()) {
         statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
@@ -282,6 +331,8 @@ void MainWindow::loadImage(const QString& path) {
     }
 
     sourceImage_ = source;
+    clearButton_->setVisible(true);
+    repositionOverlays();
 
     if (isAdvancedMode()) {
         // Advanced mode's whole point is an explicit trigger: show the
@@ -296,21 +347,34 @@ void MainWindow::loadImage(const QString& path) {
 }
 
 void MainWindow::reprocess() {
-    if (sourceImage_.isNull()) {
+    if (sourceImage_.isNull() || processing_) {
         return;
     }
 
-    statusLabel_->setText(QStringLiteral("Processing..."));
-    QApplication::processEvents();
+    processing_ = true;
+    setControlsEnabled(false);
+    statusLabel_->clear();
+    repositionOverlays();
+    spinner_->start();
 
-    if (!pipeline_) {
-        resultImage_ = sourceImage_;
-    } else if (isAdvancedMode()) {
-        resultImage_ = pipeline_->run(sourceImage_, currentAdvancedStepOrder());
-    } else {
-        resultImage_ = pipeline_->run(sourceImage_);
-    }
+    const QImage input = sourceImage_;
+    const std::shared_ptr<Pipeline> pipeline = pipeline_;
+    const bool advanced = isAdvancedMode();
+    const std::vector<size_t> stepOrder = advanced ? currentAdvancedStepOrder() : std::vector<size_t>();
 
+    processingWatcher_.setFuture(QtConcurrent::run([pipeline, input, advanced, stepOrder]() -> QImage {
+        if (!pipeline) {
+            return input;
+        }
+        return advanced ? pipeline->run(input, stepOrder) : pipeline->run(input);
+    }));
+}
+
+void MainWindow::onProcessingFinished() {
+    resultImage_ = processingWatcher_.result();
+    processing_ = false;
+    spinner_->stop();
+    setControlsEnabled(true);
     updatePreview();
     exportButton_->setEnabled(!resultImage_.isNull());
     statusLabel_->setText(QStringLiteral("Done"));
@@ -320,7 +384,22 @@ void MainWindow::onStartProcessingClicked() {
     reprocess();
 }
 
+void MainWindow::onClearImageClicked() {
+    if (processing_) {
+        return;
+    }
+    sourceImage_ = QImage();
+    resultImage_ = QImage();
+    previewLabel_->setPixmap(QPixmap());
+    clearButton_->setVisible(false);
+    exportButton_->setEnabled(false);
+    statusLabel_->setText(QStringLiteral("Drop an image or a folder of images here"));
+}
+
 void MainWindow::runBatch(const QString& folderPath) {
+    if (processing_) {
+        return;
+    }
     if (!pipeline_ || pipeline_->stepCount() == 0) {
         statusLabel_->setText(QStringLiteral("No pipeline steps loaded, cannot process a folder"));
         return;
@@ -347,6 +426,9 @@ void MainWindow::runBatch(const QString& folderPath) {
     const std::optional<std::vector<size_t>> stepOrder =
         isAdvancedMode() ? std::make_optional(currentAdvancedStepOrder()) : std::nullopt;
 
+    processing_ = true;
+    setControlsEnabled(false);
+
     const BatchResult result = batchRunner_.run(
         folderPath, outputFolder,
         [this](int done, int total, const QString& fileName) {
@@ -355,6 +437,9 @@ void MainWindow::runBatch(const QString& folderPath) {
             QApplication::processEvents();
         },
         stepOrder);
+
+    processing_ = false;
+    setControlsEnabled(true);
 
     if (result.failedFiles.isEmpty()) {
         statusLabel_->setText(QStringLiteral("Batch done: %1 image(s) exported to %2")
@@ -385,6 +470,7 @@ void MainWindow::updatePreview() {
     painter.end();
 
     previewLabel_->setPixmap(canvas);
+    repositionOverlays();
 }
 
 void MainWindow::onExportClicked() {

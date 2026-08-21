@@ -1,4 +1,5 @@
 #include "core/BackgroundRemovalStep.h"
+#include "core/BokehStep.h"
 #include "core/Pipeline.h"
 #include "core/UpscaleStep.h"
 #include "core/VisionCppSegmentationModel.h"
@@ -30,6 +31,14 @@ int main(int argc, char** argv) {
     auto upscale = std::make_shared<UpscaleStep>(upscaleModel);
     if (upscale->isReady()) {
         pipeline->addStep(upscale);
+    }
+
+    // Reuses the same segmentation model as background removal: the mask it
+    // already produces is exactly what a mask-only bokeh effect needs, no
+    // separate depth model required for this first cut (see PLAN.md).
+    auto bokeh = std::make_shared<BokehStep>(model);
+    if (bokeh->isReady()) {
+        pipeline->addStep(bokeh);
     }
     // Which step ends up enabled by default (Background Removal) is decided
     // by MainWindow, which re-derives it from each step's name every time it

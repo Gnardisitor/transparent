@@ -27,7 +27,7 @@ FetchContent_Declare(visioncpp
 )
 FetchContent_MakeAvailable(visioncpp)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Test)
 qt_standard_project_setup()
 
 # Scoped to our own subdirectories, added after vision.cpp so its (non-Qt)

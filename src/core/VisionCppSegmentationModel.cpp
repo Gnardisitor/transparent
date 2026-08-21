@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <exception>
+#include <vector>
 
 VisionCppSegmentationModel::VisionCppSegmentationModel(QString modelPath)
     : modelPath_(std::move(modelPath)) {
@@ -23,12 +24,28 @@ QImage VisionCppSegmentationModel::computeMask(const QImage& input) const {
     }
 
     const QImage rgbInput = input.convertToFormat(QImage::Format_RGB888);
+    const int width = rgbInput.width();
+    const int height = rgbInput.height();
+
+    // vision.cpp's image_view -> image_source conversion derives its row
+    // stride as (stride_bytes / bytes_per_pixel); that division silently
+    // truncates whenever Qt's own scanline padding isn't itself a whole
+    // pixel, corrupting every row's address from there on. QImage pads
+    // Format_RGB888 scanlines to a 4-byte boundary, which is only a whole
+    // number of 3-byte pixels when width is a multiple of 4 — most real
+    // photo widths aren't. Repacking into a tight buffer keeps the stride
+    // an exact multiple of 3 regardless of width, sidestepping the bug.
+    std::vector<uint8_t> packed(static_cast<size_t>(width) * height * 3);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(packed.data() + static_cast<size_t>(y) * width * 3, rgbInput.constScanLine(y),
+                    static_cast<size_t>(width) * 3);
+    }
 
     visp::image_view view;
-    view.extent = {rgbInput.width(), rgbInput.height()};
-    view.stride = static_cast<int>(rgbInput.bytesPerLine());
+    view.extent = {width, height};
+    view.stride = width * 3;
     view.format = visp::image_format::rgb_u8;
-    view.data = rgbInput.constBits();
+    view.data = packed.data();
 
     try {
         const visp::image_data maskData = visp::birefnet_compute(model_, view);

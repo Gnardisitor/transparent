@@ -4,6 +4,7 @@
 
 #include <cstring>
 #include <exception>
+#include <vector>
 
 VisionCppUpscaleModel::VisionCppUpscaleModel(QString modelPath) : modelPath_(std::move(modelPath)) {
     try {
@@ -22,12 +23,25 @@ QImage VisionCppUpscaleModel::upscale(const QImage& input) const {
     }
 
     const QImage rgbInput = input.convertToFormat(QImage::Format_RGB888);
+    const int width = rgbInput.width();
+    const int height = rgbInput.height();
+
+    // See VisionCppSegmentationModel::computeMask(): vision.cpp's image_view
+    // -> image_source conversion silently truncates the row stride whenever
+    // Qt's own scanline padding isn't a whole pixel, corrupting row
+    // addressing for most real photo widths. Repack into a tight buffer so
+    // the stride is always an exact multiple of 3 bytes/pixel.
+    std::vector<uint8_t> packed(static_cast<size_t>(width) * height * 3);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(packed.data() + static_cast<size_t>(y) * width * 3, rgbInput.constScanLine(y),
+                    static_cast<size_t>(width) * 3);
+    }
 
     visp::image_view view;
-    view.extent = {rgbInput.width(), rgbInput.height()};
-    view.stride = static_cast<int>(rgbInput.bytesPerLine());
+    view.extent = {width, height};
+    view.stride = width * 3;
     view.format = visp::image_format::rgb_u8;
-    view.data = rgbInput.constBits();
+    view.data = packed.data();
 
     try {
         const visp::image_data result = visp::esrgan_compute(model_, view);

@@ -7,6 +7,7 @@ add_library(transparent_core STATIC
   core/BackgroundRemovalStep.cpp
   core/VisionCppUpscaleModel.cpp
   core/UpscaleStep.cpp
+  core/BokehStep.cpp
   core/BatchRunner.cpp
   core/ImageFormats.cpp
 )
@@ -16,8 +17,9 @@ target_link_libraries(transparent_core PUBLIC Qt6::Gui visioncpp)
 add_executable(transparent
   main.cpp
   ui/MainWindow.cpp
+  ui/SpinnerWidget.cpp
 )
-target_link_libraries(transparent PRIVATE transparent_core Qt6::Widgets)
+target_link_libraries(transparent PRIVATE transparent_core Qt6::Widgets Qt6::Concurrent)
 target_compile_definitions(transparent PRIVATE
   TRANSPARENT_MODELS_DIR="${CMAKE_BINARY_DIR}/models"
 )
