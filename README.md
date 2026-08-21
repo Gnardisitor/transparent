@@ -4,11 +4,11 @@ Local, GPU-accelerated background removal for Linux. No cloud calls, no subscrip
 
 ## Status
 
-Linux MVP in progress. Single-image background removal works end to end: drag an image in, get a transparent PNG out. It runs on BiRefNet-lite via [vision.cpp](https://github.com/Acly/vision.cpp), with Vulkan GPU acceleration and a CPU fallback if no Vulkan device is available. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (upscaling, batch processing, Windows/macOS ports).
+Linux MVP in progress. Background removal works end to end, single image or a whole folder: drag an image in for one transparent PNG out, or drag a folder in and pick an output folder to batch every supported image inside it. It runs on BiRefNet-lite via [vision.cpp](https://github.com/Acly/vision.cpp), with Vulkan GPU acceleration and a CPU fallback if no Vulkan device is available. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (upscaling, bokeh/depth-of-field, colorization, Windows/macOS ports).
 
 ## Why
 
-Existing local background-removal tools are bad on Linux: broken or absent GPU acceleration, poor fit with the desktop they run on, and constant subscription nagging. This is a local-first, offline alternative built to work well on Linux first. See [PLAN.md](PLAN.md) for the rest of the reasoning.
+Existing local background-removal tools are bad on Linux: broken or absent GPU acceleration, poor fit with the desktop they run on, and constant subscription nagging. This started as a local-first, offline alternative built to work well on Linux first, and is growing into a broader toolkit for image edits that usually cost a subscription or are done poorly by existing local tools. See [PLAN.md](PLAN.md) for the rest of the reasoning.
 
 ## Building
 

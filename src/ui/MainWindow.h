@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/BatchRunner.h"
 #include "core/Pipeline.h"
 
 #include <QImage>
@@ -25,9 +26,11 @@ private slots:
 
 private:
     void loadImage(const QString& path);
+    void runBatch(const QString& folderPath);
     void updatePreview();
 
     std::shared_ptr<Pipeline> pipeline_;
+    BatchRunner batchRunner_;
     QLabel* statusLabel_;
     QLabel* previewLabel_;
     QPushButton* exportButton_;

@@ -1,11 +1,15 @@
 #include "MainWindow.h"
 
+#include "core/ImageFormats.h"
+
 #include <QApplication>
+#include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QLabel>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
@@ -14,16 +18,6 @@
 #include <QWidget>
 
 namespace {
-
-const QStringList kSupportedExtensions = {"png", "jpg", "jpeg", "bmp", "webp"};
-
-bool isSupportedImageUrl(const QUrl& url) {
-    if (!url.isLocalFile()) {
-        return false;
-    }
-    const QString suffix = QFileInfo(url.toLocalFile()).suffix().toLower();
-    return kSupportedExtensions.contains(suffix);
-}
 
 // Standard transparency checkerboard so the user can actually tell removed
 // background apart from an opaque white/gray fill.
@@ -39,7 +33,7 @@ QPixmap checkerboardPattern(int cell = 12) {
 } // namespace
 
 MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
-    : QMainWindow(parent), pipeline_(std::move(pipeline)) {
+    : QMainWindow(parent), pipeline_(std::move(pipeline)), batchRunner_(pipeline_) {
     setAcceptDrops(true);
     setWindowTitle(QStringLiteral("transparent"));
 
@@ -49,7 +43,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
     statusLabel_ = new QLabel(this);
     statusLabel_->setAlignment(Qt::AlignCenter);
     if (pipeline_ && pipeline_->stepCount() > 0) {
-        statusLabel_->setText(QStringLiteral("Drop an image here"));
+        statusLabel_->setText(QStringLiteral("Drop an image or a folder of images here"));
     } else {
         statusLabel_->setText(
             QStringLiteral("No background-removal model loaded — check models/ (see README)"));
@@ -74,7 +68,11 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
     const QMimeData* mime = event->mimeData();
-    if (mime->hasUrls() && isSupportedImageUrl(mime->urls().first())) {
+    if (!mime->hasUrls() || !mime->urls().first().isLocalFile()) {
+        return;
+    }
+    const QFileInfo info(mime->urls().first().toLocalFile());
+    if (info.isDir() || ImageFormats::isSupported(info.filePath())) {
         event->acceptProposedAction();
     }
 }
@@ -85,11 +83,19 @@ void MainWindow::dropEvent(QDropEvent* event) {
         return;
     }
     const QUrl url = mime->urls().first();
-    if (!isSupportedImageUrl(url)) {
+    if (!url.isLocalFile()) {
         return;
     }
-    loadImage(url.toLocalFile());
-    event->acceptProposedAction();
+
+    const QString path = url.toLocalFile();
+    const QFileInfo info(path);
+    if (info.isDir()) {
+        runBatch(path);
+        event->acceptProposedAction();
+    } else if (ImageFormats::isSupported(path)) {
+        loadImage(path);
+        event->acceptProposedAction();
+    }
 }
 
 void MainWindow::loadImage(const QString& path) {
@@ -107,6 +113,49 @@ void MainWindow::loadImage(const QString& path) {
     updatePreview();
     exportButton_->setEnabled(!resultImage_.isNull());
     statusLabel_->setText(QStringLiteral("Done"));
+}
+
+void MainWindow::runBatch(const QString& folderPath) {
+    if (!pipeline_ || pipeline_->stepCount() == 0) {
+        statusLabel_->setText(QStringLiteral("No pipeline steps loaded, cannot process a folder"));
+        return;
+    }
+
+    const QStringList images = batchRunner_.discoverImages(folderPath);
+    if (images.isEmpty()) {
+        statusLabel_->setText(QStringLiteral("No supported images found in that folder"));
+        return;
+    }
+
+    const QString outputFolder = QFileDialog::getExistingDirectory(
+        this, QStringLiteral("Choose output folder for %1 image(s)").arg(images.size()));
+    if (outputFolder.isEmpty()) {
+        return;
+    }
+    if (QDir(outputFolder) == QDir(folderPath)) {
+        QMessageBox::warning(this, QStringLiteral("Same folder"),
+                              QStringLiteral("Output folder must be different from the input "
+                                              "folder, to avoid overwriting source images."));
+        return;
+    }
+
+    const BatchResult result = batchRunner_.run(
+        folderPath, outputFolder, [this](int done, int total, const QString& fileName) {
+            statusLabel_->setText(
+                QStringLiteral("Processing %1/%2: %3").arg(done).arg(total).arg(fileName));
+            QApplication::processEvents();
+        });
+
+    if (result.failedFiles.isEmpty()) {
+        statusLabel_->setText(QStringLiteral("Batch done: %1 image(s) exported to %2")
+                                   .arg(result.succeeded)
+                                   .arg(outputFolder));
+    } else {
+        statusLabel_->setText(QStringLiteral("Batch done: %1 succeeded, %2 failed (%3)")
+                                   .arg(result.succeeded)
+                                   .arg(result.failedFiles.size())
+                                   .arg(result.failedFiles.join(QStringLiteral(", "))));
+    }
 }
 
 void MainWindow::updatePreview() {
