@@ -41,6 +41,10 @@ private slots:
     void singleStepIsApplied();
     void stepsRunInOrder();
     void batchRunsEachInputIndependently();
+    void stepsAreEnabledByDefault();
+    void disabledStepIsSkippedButOthersStillRun();
+    void customOrderRunsOnlyListedStepsInGivenOrder();
+    void customOrderIgnoresEnabledFlag();
 };
 
 void TestPipeline::emptyPipelineReturnsInputUnchanged() {
@@ -91,6 +95,55 @@ void TestPipeline::batchRunsEachInputIndependently() {
     QCOMPARE(outputs.size(), size_t(2));
     QCOMPARE(outputs[0].text(QStringLiteral("tag")), QStringLiteral("X"));
     QCOMPARE(outputs[1].text(QStringLiteral("tag")), QStringLiteral("X"));
+}
+
+void TestPipeline::stepsAreEnabledByDefault() {
+    Pipeline pipeline;
+    pipeline.addStep(std::make_shared<MirrorStep>());
+
+    QVERIFY(pipeline.isStepEnabled(0));
+    QCOMPARE(pipeline.stepName(0), QStringLiteral("Mirror"));
+}
+
+void TestPipeline::disabledStepIsSkippedButOthersStillRun() {
+    Pipeline pipeline;
+    pipeline.addStep(std::make_shared<TagStep>(QStringLiteral("A")));
+    pipeline.addStep(std::make_shared<TagStep>(QStringLiteral("B")));
+
+    pipeline.setStepEnabled(0, false);
+
+    QImage input(2, 2, QImage::Format_ARGB32);
+    const QImage output = pipeline.run(input);
+
+    QCOMPARE(output.text(QStringLiteral("tag")), QStringLiteral("B"));
+    QVERIFY(!pipeline.isStepEnabled(0));
+    QVERIFY(pipeline.isStepEnabled(1));
+}
+
+void TestPipeline::customOrderRunsOnlyListedStepsInGivenOrder() {
+    Pipeline pipeline;
+    pipeline.addStep(std::make_shared<TagStep>(QStringLiteral("A")));
+    pipeline.addStep(std::make_shared<TagStep>(QStringLiteral("B")));
+    pipeline.addStep(std::make_shared<TagStep>(QStringLiteral("C")));
+
+    QImage input(2, 2, QImage::Format_ARGB32);
+    // Reversed order, and step 1 ("B") left out entirely.
+    const QImage output = pipeline.run(input, {2, 0});
+
+    QCOMPARE(output.text(QStringLiteral("tag")), QStringLiteral("CA"));
+}
+
+void TestPipeline::customOrderIgnoresEnabledFlag() {
+    Pipeline pipeline;
+    pipeline.addStep(std::make_shared<TagStep>(QStringLiteral("A")));
+    pipeline.setStepEnabled(0, false);
+
+    QImage input(2, 2, QImage::Format_ARGB32);
+    // Explicitly listed, so it runs even though disabled: the caller already
+    // decided inclusion by what it put in the order list.
+    const QImage output = pipeline.run(input, {0});
+
+    QCOMPARE(output.text(QStringLiteral("tag")), QStringLiteral("A"));
 }
 
 QTEST_MAIN(TestPipeline)

@@ -7,6 +7,8 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <vector>
 
 // Outcome of one run(): how many images made it through, and the file names
 // (not full paths) of any that didn't, so the caller can report both without
@@ -37,9 +39,13 @@ public:
     // in this batch (e.g. cat.png and cat.jpg both wanting cat.png) counts
     // as a failure and does not stop the rest of the batch. onProgress, if
     // set, is called once per image after it's handled, with
-    // (imagesDoneSoFar, totalImages, sourceFileName).
+    // (imagesDoneSoFar, totalImages, sourceFileName). stepOrder, if set, is
+    // forwarded to Pipeline::run(image, stepOrder) instead of the default
+    // fixed-order run(image) — lets an Advanced-mode UI's step
+    // selection/ordering apply to folder batches too.
     BatchResult run(const QString& inputFolder, const QString& outputFolder,
-                     const std::function<void(int, int, const QString&)>& onProgress = nullptr) const;
+                     const std::function<void(int, int, const QString&)>& onProgress = nullptr,
+                     const std::optional<std::vector<size_t>>& stepOrder = std::nullopt) const;
 
 private:
     std::shared_ptr<Pipeline> pipeline_;

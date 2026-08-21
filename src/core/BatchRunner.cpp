@@ -23,7 +23,8 @@ QStringList BatchRunner::discoverImages(const QString& folderPath) const {
 }
 
 BatchResult BatchRunner::run(const QString& inputFolder, const QString& outputFolder,
-                              const std::function<void(int, int, const QString&)>& onProgress) const {
+                              const std::function<void(int, int, const QString&)>& onProgress,
+                              const std::optional<std::vector<size_t>>& stepOrder) const {
     QDir().mkpath(outputFolder);
 
     const QStringList images = discoverImages(inputFolder);
@@ -43,7 +44,11 @@ BatchResult BatchRunner::run(const QString& inputFolder, const QString& outputFo
             const QImage source(info.filePath());
             ok = !source.isNull();
             if (ok) {
-                const QImage processed = pipeline_ ? pipeline_->run(source) : source;
+                QImage processed = source;
+                if (pipeline_) {
+                    processed = stepOrder.has_value() ? pipeline_->run(source, *stepOrder)
+                                                       : pipeline_->run(source);
+                }
                 ok = processed.save(outputDir.filePath(outputName), "PNG");
             }
             if (ok) {

@@ -9,4 +9,5 @@ endfunction()
 
 add_transparent_test(test_pipeline)
 add_transparent_test(test_background_removal_step)
+add_transparent_test(test_upscale_step)
 add_transparent_test(test_batch_runner)

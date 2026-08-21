@@ -26,6 +26,23 @@ QImage makeTestImage(const QColor& color) {
     return image;
 }
 
+// Records step ordering via a PNG tEXt chunk (QImage::text() survives a
+// save/load round-trip), same approach test_pipeline.cpp uses for sequencing.
+class TagStep : public PipelineStep {
+public:
+    explicit TagStep(QString tag) : tag_(std::move(tag)) {}
+
+    QImage process(const QImage& input) const override {
+        QImage out = input;
+        out.setText(QStringLiteral("tag"), out.text(QStringLiteral("tag")) + tag_);
+        return out;
+    }
+    QString name() const override { return QStringLiteral("Tag(%1)").arg(tag_); }
+
+private:
+    QString tag_;
+};
+
 } // namespace
 
 class TestBatchRunner : public QObject {
@@ -38,6 +55,7 @@ private slots:
     void runReportsProgressPerImage();
     void runCreatesOutputFolderIfMissing();
     void runFailsSecondFileInsteadOfOverwritingOnOutputNameCollision();
+    void runWithStepOrderAppliesOnlyListedStepsInGivenOrder();
 };
 
 void TestBatchRunner::discoverImagesFindsOnlySupportedFilesSortedByName() {
@@ -168,6 +186,30 @@ void TestBatchRunner::runFailsSecondFileInsteadOfOverwritingOnOutputNameCollisio
     // 255); red, from the second source image, would mean it overwrote.
     QVERIFY(output.pixelColor(0, 0).blue() > 200);
     QVERIFY(output.pixelColor(0, 0).red() < 50);
+}
+
+void TestBatchRunner::runWithStepOrderAppliesOnlyListedStepsInGivenOrder() {
+    QTemporaryDir inputDir;
+    QTemporaryDir outputDir;
+    QVERIFY(inputDir.isValid() && outputDir.isValid());
+
+    makeTestImage(Qt::red).save(inputDir.filePath("photo.png"));
+
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<TagStep>(QStringLiteral("A")));
+    pipeline->addStep(std::make_shared<TagStep>(QStringLiteral("B")));
+    pipeline->addStep(std::make_shared<TagStep>(QStringLiteral("C")));
+    BatchRunner runner(pipeline);
+
+    // Reversed order, and step 1 ("B") left out entirely.
+    const BatchResult result =
+        runner.run(inputDir.path(), outputDir.path(), nullptr, std::vector<size_t>{2, 0});
+
+    QCOMPARE(result.succeeded, 1);
+
+    const QImage output(outputDir.filePath("photo.png"));
+    QVERIFY(!output.isNull());
+    QCOMPARE(output.text(QStringLiteral("tag")), QStringLiteral("CA"));
 }
 
 QTEST_MAIN(TestBatchRunner)

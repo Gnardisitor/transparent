@@ -4,7 +4,7 @@ Local, GPU-accelerated background removal for Linux. No cloud calls, no subscrip
 
 ## Status
 
-Linux MVP in progress. Background removal works end to end, single image or a whole folder: drag an image in for one transparent PNG out, or drag a folder in and pick an output folder to batch every supported image inside it. It runs on BiRefNet-lite via [vision.cpp](https://github.com/Acly/vision.cpp), with Vulkan GPU acceleration and a CPU fallback if no Vulkan device is available. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (upscaling, bokeh/depth-of-field, colorization, Windows/macOS ports).
+Linux MVP in progress. Background removal and 4x upscaling both work end to end, single image or a whole folder: drag an image in for one processed PNG out, or drag a folder in and pick an output folder to batch every supported image inside it. Simple mode runs one operation at a time (pick it from the dropdown next to the mode selector); Advanced mode lets you pick several, in whatever order you want, and run them together. Both models run via [vision.cpp](https://github.com/Acly/vision.cpp) (BiRefNet-lite for background removal, Real-ESRGAN for upscaling), with Vulkan GPU acceleration and a CPU fallback if no Vulkan device is available. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (bokeh/depth-of-field, colorization, Windows/macOS ports).
 
 ## Why
 
@@ -56,8 +56,8 @@ Run the app:
 
 ## Models
 
-Background removal uses [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) (MIT), converted to GGUF by [Acly](https://huggingface.co/Acly/BiRefNet-GGUF) for vision.cpp. Weights aren't committed to this repo. [models/CMakeLists.txt](models/CMakeLists.txt) downloads and checksum-verifies them at configure time, the same way vision.cpp fetches its own default models.
+Background removal uses [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) (MIT), converted to GGUF by [Acly](https://huggingface.co/Acly/BiRefNet-GGUF) for vision.cpp. Upscaling uses the `foolhardy_Remacri` [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) checkpoint (BSD-3-Clause), also converted to GGUF by [Acly](https://huggingface.co/Acly/Real-ESRGAN-GGUF). Weights aren't committed to this repo. [models/CMakeLists.txt](models/CMakeLists.txt) downloads and checksum-verifies them at configure time, the same way vision.cpp fetches its own default models.
 
 ## License
 
-This project's own code is [GPLv3](LICENSE). See [PLAN.md](PLAN.md#project-intent) for why, over LGPLv3 or GPLv2. Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite) keep their own licenses; see PLAN.md for the full list.
+This project's own code is [GPLv3](LICENSE). See [PLAN.md](PLAN.md#project-intent) for why, over LGPLv3 or GPLv2. Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, Real-ESRGAN) keep their own licenses; see PLAN.md for the full list.

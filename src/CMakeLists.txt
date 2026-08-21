@@ -5,6 +5,8 @@ add_library(transparent_core STATIC
   core/Pipeline.cpp
   core/VisionCppSegmentationModel.cpp
   core/BackgroundRemovalStep.cpp
+  core/VisionCppUpscaleModel.cpp
+  core/UpscaleStep.cpp
   core/BatchRunner.cpp
   core/ImageFormats.cpp
 )
