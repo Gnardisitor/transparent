@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include "core/GifIO.h"
 #include "core/ImageFormats.h"
 #include "ui/SpinnerWidget.h"
 
@@ -22,11 +23,13 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QtConcurrentRun>
 
+#include <algorithm>
 #include <optional>
 
 namespace {
@@ -57,11 +60,12 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
             QStringLiteral(
                 "<h3>transparent</h3>"
                 "<p>Local, GPU-accelerated background removal, image upscaling, and bokeh "
-                "for Linux. No cloud calls, no subscriptions, no telemetry.</p>"
+                "for Linux, with animated-GIF support (every frame runs through the same "
+                "pipeline). No cloud calls, no subscriptions, no telemetry.</p>"
                 "<p>By Dragos Bajanica.</p>"
                 "<p>Licensed under the GNU General Public License v3 (GPLv3). "
                 "Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, "
-                "Real-ESRGAN) keep their own licenses.</p>"));
+                "Real-ESRGAN, giflib) keep their own licenses.</p>"));
     });
 
     auto* central = new QWidget(this);
@@ -161,6 +165,15 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
     // moves the work off-thread; this watcher picks up the result.
     connect(&processingWatcher_, &QFutureWatcher<QImage>::finished, this,
             &MainWindow::onProcessingFinished);
+    connect(&gifProcessingWatcher_, &QFutureWatcher<std::vector<GifIO::Frame>>::finished, this,
+            &MainWindow::onGifProcessingFinished);
+
+    // Single-shot and re-armed with the new current frame's own delay each
+    // time it fires (advanceGifPreviewFrame), since GIF frames don't share
+    // one fixed interval the way a repeating QTimer assumes.
+    gifPreviewTimer_ = new QTimer(this);
+    gifPreviewTimer_->setSingleShot(true);
+    connect(gifPreviewTimer_, &QTimer::timeout, this, &MainWindow::advanceGifPreviewFrame);
 }
 
 QWidget* MainWindow::buildAdvancedPage() {
@@ -199,10 +212,21 @@ void MainWindow::populateAdvancedStepList() {
     if (!pipeline_) {
         return;
     }
+    // Populating fires itemChanged reentrantly — QListWidgetItem's own
+    // construction/setData/setFlags calls below each emit it at least once,
+    // every time reporting the item's not-yet-set default Qt::Unchecked
+    // state, before setCheckState() ever runs. Left unblocked, the
+    // itemChanged handler (below) writes that transient Unchecked back into
+    // pipeline_ — silently disabling a step this function meant to leave
+    // enabled (e.g. Background Removal, Simple mode's default), since by
+    // the time setCheckState() itself runs, isStepEnabled() already reads
+    // back the corrupted false and "confirms" Unchecked instead of
+    // overwriting it, so nothing ever restores the correct state. This is a
+    // one-way sync (Pipeline state -> checkbox display), so the handler has
+    // no business firing during it at all.
+    const QSignalBlocker blocker(advancedStepList_);
     for (size_t i = 0; i < pipeline_->stepCount(); ++i) {
         auto* item = new QListWidgetItem(pipeline_->stepName(i), advancedStepList_);
-        // Set before setCheckState(): the itemChanged handler above reads
-        // this back out, so it must already be correct when that fires.
         item->setData(Qt::UserRole, static_cast<qulonglong>(i));
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(pipeline_->isStepEnabled(i) ? Qt::Checked : Qt::Unchecked);
@@ -323,14 +347,29 @@ void MainWindow::loadImage(const QString& path) {
     if (processing_) {
         return;
     }
+    stopGifPreviewAnimation();
 
-    QImage source(path);
-    if (source.isNull()) {
-        statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
-        return;
+    if (GifIO::isAnimated(path)) {
+        std::vector<GifIO::Frame> frames = GifIO::readFrames(path);
+        if (frames.empty()) {
+            statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
+            return;
+        }
+        isAnimatedGifSource_ = true;
+        sourceGifFrames_ = std::move(frames);
+        sourceImage_ = sourceGifFrames_.front().image;
+    } else {
+        const QImage source(path);
+        if (source.isNull()) {
+            statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
+            return;
+        }
+        isAnimatedGifSource_ = false;
+        sourceGifFrames_.clear();
+        sourceImage_ = source;
     }
+    resultGifFrames_.clear();
 
-    sourceImage_ = source;
     clearButton_->setVisible(true);
     repositionOverlays();
 
@@ -347,9 +386,11 @@ void MainWindow::loadImage(const QString& path) {
 }
 
 void MainWindow::reprocess() {
-    if (sourceImage_.isNull() || processing_) {
+    const bool hasSource = isAnimatedGifSource_ ? !sourceGifFrames_.empty() : !sourceImage_.isNull();
+    if (!hasSource || processing_) {
         return;
     }
+    stopGifPreviewAnimation();
 
     processing_ = true;
     setControlsEnabled(false);
@@ -357,17 +398,33 @@ void MainWindow::reprocess() {
     repositionOverlays();
     spinner_->start();
 
-    const QImage input = sourceImage_;
     const std::shared_ptr<Pipeline> pipeline = pipeline_;
     const bool advanced = isAdvancedMode();
     const std::vector<size_t> stepOrder = advanced ? currentAdvancedStepOrder() : std::vector<size_t>();
 
-    processingWatcher_.setFuture(QtConcurrent::run([pipeline, input, advanced, stepOrder]() -> QImage {
-        if (!pipeline) {
-            return input;
-        }
-        return advanced ? pipeline->run(input, stepOrder) : pipeline->run(input);
-    }));
+    if (isAnimatedGifSource_) {
+        const std::vector<GifIO::Frame> input = sourceGifFrames_;
+        gifProcessingWatcher_.setFuture(QtConcurrent::run(
+            [pipeline, input, advanced, stepOrder]() -> std::vector<GifIO::Frame> {
+                std::vector<GifIO::Frame> output = input;
+                for (GifIO::Frame& frame : output) {
+                    if (pipeline) {
+                        frame.image = advanced ? pipeline->run(frame.image, stepOrder)
+                                                : pipeline->run(frame.image);
+                    }
+                }
+                return output;
+            }));
+    } else {
+        const QImage input = sourceImage_;
+        processingWatcher_.setFuture(
+            QtConcurrent::run([pipeline, input, advanced, stepOrder]() -> QImage {
+                if (!pipeline) {
+                    return input;
+                }
+                return advanced ? pipeline->run(input, stepOrder) : pipeline->run(input);
+            }));
+    }
 }
 
 void MainWindow::onProcessingFinished() {
@@ -377,7 +434,42 @@ void MainWindow::onProcessingFinished() {
     setControlsEnabled(true);
     updatePreview();
     exportButton_->setEnabled(!resultImage_.isNull());
-    statusLabel_->setText(QStringLiteral("Done"));
+}
+
+void MainWindow::onGifProcessingFinished() {
+    resultGifFrames_ = gifProcessingWatcher_.result();
+    processing_ = false;
+    spinner_->stop();
+    setControlsEnabled(true);
+    gifPreviewFrameIndex_ = 0;
+    resultImage_ = resultGifFrames_.empty() ? QImage() : resultGifFrames_.front().image;
+    updatePreview();
+    exportButton_->setEnabled(!resultGifFrames_.empty());
+    startGifPreviewAnimation();
+}
+
+void MainWindow::advanceGifPreviewFrame() {
+    if (resultGifFrames_.empty()) {
+        return;
+    }
+    gifPreviewFrameIndex_ = (gifPreviewFrameIndex_ + 1) % static_cast<int>(resultGifFrames_.size());
+    resultImage_ = resultGifFrames_[static_cast<size_t>(gifPreviewFrameIndex_)].image;
+    updatePreview();
+    const int delayMs =
+        std::max(10, resultGifFrames_[static_cast<size_t>(gifPreviewFrameIndex_)].delayCs * 10);
+    gifPreviewTimer_->start(delayMs);
+}
+
+void MainWindow::startGifPreviewAnimation() {
+    if (resultGifFrames_.size() <= 1) {
+        return;
+    }
+    const int delayMs = std::max(10, resultGifFrames_.front().delayCs * 10);
+    gifPreviewTimer_->start(delayMs);
+}
+
+void MainWindow::stopGifPreviewAnimation() {
+    gifPreviewTimer_->stop();
 }
 
 void MainWindow::onStartProcessingClicked() {
@@ -388,6 +480,10 @@ void MainWindow::onClearImageClicked() {
     if (processing_) {
         return;
     }
+    stopGifPreviewAnimation();
+    isAnimatedGifSource_ = false;
+    sourceGifFrames_.clear();
+    resultGifFrames_.clear();
     sourceImage_ = QImage();
     resultImage_ = QImage();
     previewLabel_->setPixmap(QPixmap());
@@ -474,6 +570,20 @@ void MainWindow::updatePreview() {
 }
 
 void MainWindow::onExportClicked() {
+    if (isAnimatedGifSource_) {
+        if (resultGifFrames_.empty()) {
+            return;
+        }
+        const QString path = QFileDialog::getSaveFileName(
+            this, QStringLiteral("Export GIF"), QStringLiteral("output.gif"),
+            QStringLiteral("GIF image (*.gif)"));
+        if (path.isEmpty()) {
+            return;
+        }
+        GifIO::writeFrames(path, resultGifFrames_);
+        return;
+    }
+
     if (resultImage_.isNull()) {
         return;
     }

@@ -4,6 +4,7 @@
   "description": "Local, GPU-accelerated background removal (and later upscaling), Linux-first",
   "dependencies": [
     "vulkan",
-    "vulkan-headers"
+    "vulkan-headers",
+    "giflib"
   ]
 }

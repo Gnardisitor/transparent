@@ -1,6 +1,7 @@
 #include <QtTest>
 
 #include "core/BatchRunner.h"
+#include "core/GifIO.h"
 #include "core/Pipeline.h"
 
 #include <QDir>
@@ -56,6 +57,8 @@ private slots:
     void runCreatesOutputFolderIfMissing();
     void runFailsSecondFileInsteadOfOverwritingOnOutputNameCollision();
     void runWithStepOrderAppliesOnlyListedStepsInGivenOrder();
+    void runWritesAnimatedGifPerFrameInsteadOfPng();
+    void runTreatsSingleFrameGifAsPlainImage();
 };
 
 void TestBatchRunner::discoverImagesFindsOnlySupportedFilesSortedByName() {
@@ -210,6 +213,51 @@ void TestBatchRunner::runWithStepOrderAppliesOnlyListedStepsInGivenOrder() {
     const QImage output(outputDir.filePath("photo.png"));
     QVERIFY(!output.isNull());
     QCOMPARE(output.text(QStringLiteral("tag")), QStringLiteral("CA"));
+}
+
+void TestBatchRunner::runWritesAnimatedGifPerFrameInsteadOfPng() {
+    QTemporaryDir inputDir;
+    QTemporaryDir outputDir;
+    QVERIFY(inputDir.isValid() && outputDir.isValid());
+
+    std::vector<GifIO::Frame> sourceFrames{{makeTestImage(Qt::red), 10},
+                                            {makeTestImage(Qt::green), 10}};
+    QVERIFY(GifIO::writeFrames(inputDir.filePath("anim.gif"), sourceFrames));
+
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<InvertStep>());
+    BatchRunner runner(pipeline);
+
+    const BatchResult result = runner.run(inputDir.path(), outputDir.path());
+
+    QCOMPARE(result.succeeded, 1);
+    QVERIFY(result.failedFiles.isEmpty());
+    QVERIFY(QFile::exists(outputDir.filePath("anim.gif")));
+    QVERIFY(!QFile::exists(outputDir.filePath("anim.png")));
+
+    const std::vector<GifIO::Frame> output = GifIO::readFrames(outputDir.filePath("anim.gif"));
+    QCOMPARE(output.size(), 2u);
+    // InvertStep inverts RGB (not alpha), so red -> cyan and green -> magenta.
+    QCOMPARE(output[0].image.pixelColor(0, 0), QColor(Qt::cyan));
+    QCOMPARE(output[1].image.pixelColor(0, 0), QColor(Qt::magenta));
+}
+
+void TestBatchRunner::runTreatsSingleFrameGifAsPlainImage() {
+    QTemporaryDir inputDir;
+    QTemporaryDir outputDir;
+    QVERIFY(inputDir.isValid() && outputDir.isValid());
+
+    // Qt's bundled GIF plugin is read-only (no encoder), so a single-frame
+    // GIF fixture has to be built via GifIO too, same as the app itself
+    // would produce one — QImage::save(..., "GIF") silently fails.
+    QVERIFY(GifIO::writeFrames(inputDir.filePath("photo.gif"), {{makeTestImage(Qt::red), 10}}));
+
+    BatchRunner runner(std::make_shared<Pipeline>());
+    const BatchResult result = runner.run(inputDir.path(), outputDir.path());
+
+    QCOMPARE(result.succeeded, 1);
+    QVERIFY(QFile::exists(outputDir.filePath("photo.png")));
+    QVERIFY(!QFile::exists(outputDir.filePath("photo.gif")));
 }
 
 QTEST_MAIN(TestBatchRunner)

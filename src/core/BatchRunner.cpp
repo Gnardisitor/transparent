@@ -1,4 +1,5 @@
 #include "BatchRunner.h"
+#include "GifIO.h"
 #include "ImageFormats.h"
 
 #include <QDir>
@@ -37,19 +38,35 @@ BatchResult BatchRunner::run(const QString& inputFolder, const QString& outputFo
     QSet<QString> claimedOutputNames;
     for (int i = 0; i < images.size(); ++i) {
         const QFileInfo info(images[i]);
-        const QString outputName = info.completeBaseName() + QStringLiteral(".png");
+        const bool animated = GifIO::isAnimated(info.filePath());
+        const QString outputName =
+            info.completeBaseName() + (animated ? QStringLiteral(".gif") : QStringLiteral(".png"));
 
         bool ok = false;
         if (!claimedOutputNames.contains(outputName)) {
-            const QImage source(info.filePath());
-            ok = !source.isNull();
-            if (ok) {
-                QImage processed = source;
-                if (pipeline_) {
-                    processed = stepOrder.has_value() ? pipeline_->run(source, *stepOrder)
-                                                       : pipeline_->run(source);
+            if (animated) {
+                std::vector<GifIO::Frame> frames = GifIO::readFrames(info.filePath());
+                ok = !frames.empty();
+                if (ok && pipeline_) {
+                    for (GifIO::Frame& frame : frames) {
+                        frame.image = stepOrder.has_value() ? pipeline_->run(frame.image, *stepOrder)
+                                                              : pipeline_->run(frame.image);
+                    }
                 }
-                ok = processed.save(outputDir.filePath(outputName), "PNG");
+                if (ok) {
+                    ok = GifIO::writeFrames(outputDir.filePath(outputName), frames);
+                }
+            } else {
+                const QImage source(info.filePath());
+                ok = !source.isNull();
+                if (ok) {
+                    QImage processed = source;
+                    if (pipeline_) {
+                        processed = stepOrder.has_value() ? pipeline_->run(source, *stepOrder)
+                                                           : pipeline_->run(source);
+                    }
+                    ok = processed.save(outputDir.filePath(outputName), "PNG");
+                }
             }
             if (ok) {
                 claimedOutputNames.insert(outputName);

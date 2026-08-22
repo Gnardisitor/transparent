@@ -4,7 +4,7 @@ Local, GPU-accelerated background removal for Linux. No cloud calls, no subscrip
 
 ## Status
 
-Linux MVP in progress. Background removal, 4x upscaling, and a mask-only bokeh/depth-of-field blur all work end to end, single image or a whole folder: drag an image in for one processed PNG out, or drag a folder in and pick an output folder to batch every supported image inside it. Simple mode runs one operation at a time (pick it from the dropdown next to the mode selector); Advanced mode lets you pick several, in whatever order you want, and run them together. Background removal and upscaling run via [vision.cpp](https://github.com/Acly/vision.cpp) (BiRefNet-lite and Real-ESRGAN respectively), with Vulkan GPU acceleration and a CPU fallback if no Vulkan device is available; bokeh reuses BiRefNet-lite's own mask to blur the background, no separate model. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (full depth-graduated blur, colorization, Windows/macOS ports).
+Linux MVP in progress. Background removal, 4x upscaling, and a mask-only bokeh/depth-of-field blur all work end to end, single image, a whole folder, or an animated GIF: drag an image in for one processed PNG out, drag a folder in and pick an output folder to batch every supported image inside it, or drag an animated GIF in to run every frame through the pipeline and export a new animated GIF. Simple mode runs one operation at a time (pick it from the dropdown next to the mode selector); Advanced mode lets you pick several, in whatever order you want, and run them together. Background removal and upscaling run via [vision.cpp](https://github.com/Acly/vision.cpp) (BiRefNet-lite and Real-ESRGAN respectively), with Vulkan GPU acceleration and a CPU fallback if no Vulkan device is available; bokeh reuses BiRefNet-lite's own mask to blur the background, no separate model. GIF decoding uses Qt's own plugin; encoding uses [giflib](http://giflib.sourceforge.net/) (MIT) with a small built-in color quantizer, since giflib only reads/writes the container format. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (true video support, full depth-graduated blur, colorization, Windows/macOS ports).
 
 ## Why
 
@@ -19,7 +19,7 @@ Prerequisites:
 - Qt6 (Widgets, Test components)
 - git (this repo uses a submodule)
 
-vcpkg is vendored as a git submodule (used to pull Vulkan headers/loader); [vision.cpp](https://github.com/Acly/vision.cpp) and its ggml backend are fetched and built from source via CMake `FetchContent`, pinned to a tagged release.
+vcpkg is vendored as a git submodule (used to pull Vulkan headers/loader and [giflib](http://giflib.sourceforge.net/)); [vision.cpp](https://github.com/Acly/vision.cpp) and its ggml backend are fetched and built from source via CMake `FetchContent`, pinned to a tagged release.
 
 Clone with submodules:
 
@@ -60,4 +60,4 @@ Background removal uses [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) 
 
 ## License
 
-This project's own code is [GPLv3](LICENSE). See [PLAN.md](PLAN.md#project-intent) for why, over LGPLv3 or GPLv2. Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, Real-ESRGAN) keep their own licenses; see PLAN.md for the full list.
+This project's own code is [GPLv3](LICENSE). See [PLAN.md](PLAN.md#project-intent) for why, over LGPLv3 or GPLv2. Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, Real-ESRGAN, giflib) keep their own licenses; see PLAN.md for the full list.

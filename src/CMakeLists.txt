@@ -10,9 +10,10 @@ add_library(transparent_core STATIC
   core/BokehStep.cpp
   core/BatchRunner.cpp
   core/ImageFormats.cpp
+  core/GifIO.cpp
 )
 target_include_directories(transparent_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(transparent_core PUBLIC Qt6::Gui visioncpp)
+target_link_libraries(transparent_core PUBLIC Qt6::Gui visioncpp GIF::GIF)
 
 add_executable(transparent
   main.cpp

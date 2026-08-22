@@ -30,6 +30,10 @@ FetchContent_MakeAvailable(visioncpp)
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Test)
 qt_standard_project_setup()
 
+# giflib (vcpkg, MIT): reads/writes the GIF container only, no quantizer of
+# its own — GifIO builds the output palette itself (see src/core/GifIO.cpp).
+find_package(GIF REQUIRED)
+
 # Scoped to our own subdirectories, added after vision.cpp so its (non-Qt)
 # targets don't pick these up and warn about missing Qt AUTOGEN support.
 set(CMAKE_AUTOMOC ON)

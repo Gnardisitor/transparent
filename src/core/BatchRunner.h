@@ -33,11 +33,15 @@ public:
     QStringList discoverImages(const QString& folderPath) const;
 
     // Runs discoverImages(inputFolder) through the pipeline, saving each
-    // result as "<basename>.png" under outputFolder (created if missing). A
-    // source image that fails to load, a result that fails to save, or a
-    // source image whose output name was already claimed by an earlier one
-    // in this batch (e.g. cat.png and cat.jpg both wanting cat.png) counts
-    // as a failure and does not stop the rest of the batch. onProgress, if
+    // result as "<basename>.png" under outputFolder (created if missing). An
+    // animated GIF source (GifIO::isAnimated) is the one exception: every
+    // frame runs through the pipeline individually and the result is saved
+    // as "<basename>.gif", an animated GIF of the same length, instead of
+    // collapsing to a single PNG of just its first frame. A source image
+    // that fails to load, a result that fails to save, or a source image
+    // whose output name was already claimed by an earlier one in this batch
+    // (e.g. cat.png and cat.jpg both wanting cat.png) counts as a failure
+    // and does not stop the rest of the batch. onProgress, if
     // set, is called once per image after it's handled, with
     // (imagesDoneSoFar, totalImages, sourceFileName). stepOrder, if set, is
     // forwarded to Pipeline::run(image, stepOrder) instead of the default

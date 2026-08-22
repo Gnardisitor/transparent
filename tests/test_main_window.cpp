@@ -1,0 +1,60 @@
+#include <QtTest>
+
+#include "core/Pipeline.h"
+#include "core/PipelineStep.h"
+#include "ui/MainWindow.h"
+
+#include <memory>
+
+namespace {
+
+// Deterministic, GPU-free step so this can construct a real Pipeline
+// without a real segmentation/upscale model, same approach test_pipeline.cpp
+// and test_batch_runner.cpp use. Only its name matters here — MainWindow
+// picks its default-enabled step by matching "Background Removal".
+class NamedStep : public PipelineStep {
+public:
+    explicit NamedStep(QString name) : name_(std::move(name)) {}
+    QImage process(const QImage& input) const override { return input; }
+    QString name() const override { return name_; }
+
+private:
+    QString name_;
+};
+
+} // namespace
+
+class TestMainWindow : public QObject {
+    Q_OBJECT
+
+private slots:
+    void constructionLeavesDefaultStepEnabledDespiteAdvancedPagePopulation();
+};
+
+void TestMainWindow::constructionLeavesDefaultStepEnabledDespiteAdvancedPagePopulation() {
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Background Removal")));
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Upscaling")));
+
+    MainWindow window(pipeline);
+
+    // Regression test: building the Advanced-mode step list used to fire
+    // QListWidget::itemChanged reentrantly during population — each of
+    // QListWidgetItem's own construction/setData/setFlags calls emits it at
+    // least once, always reporting the item's not-yet-set default
+    // Qt::Unchecked state, before setCheckState() ever runs. Left
+    // unblocked, the itemChanged handler wrote that transient Unchecked
+    // back into Pipeline, silently disabling Background Removal — the step
+    // MainWindow's constructor had just enabled as Simple mode's default —
+    // and by the time setCheckState() itself ran, isStepEnabled() already
+    // read back that corrupted false and "confirmed" Unchecked instead of
+    // overwriting it, so nothing ever restored the correct state. In
+    // practice this meant the very first image dropped after launch always
+    // passed through unprocessed. See populateAdvancedStepList()'s
+    // QSignalBlocker for the fix.
+    QVERIFY(pipeline->isStepEnabled(0));
+    QVERIFY(!pipeline->isStepEnabled(1));
+}
+
+QTEST_MAIN(TestMainWindow)
+#include "test_main_window.moc"

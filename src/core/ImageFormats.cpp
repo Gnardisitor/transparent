@@ -5,7 +5,7 @@
 namespace ImageFormats {
 
 QStringList supportedExtensions() {
-    return {"png", "jpg", "jpeg", "bmp", "webp"};
+    return {"png", "jpg", "jpeg", "bmp", "webp", "gif"};
 }
 
 bool isSupported(const QString& filePath) {
