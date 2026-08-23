@@ -79,6 +79,86 @@ Even though the MVP only did one operation (background removal), it's built as a
 
 One level down, the same idea again: `SegmentationModel`. `BackgroundRemovalStep` never talks to ncnn or vision.cpp directly, only to a `SegmentationModel` interface (`isReady()` / `computeMask()`). `NcnnSegmentationModel` was the first adapter, `VisionCppSegmentationModel` replaced it, and the switch touched zero lines of `BackgroundRemovalStep`. `UpscaleModel` mirrors the same seam for Real-ESRGAN.
 
+### Windows port: cross-compilation via MinGW-w64 from the existing Linux CI runner
+
+Researched and decided ahead of actually starting the Windows port (still gated behind Linux distro packages, see the deferred list below); full citations and the superseded native-runner analysis are in [docs/research/windows-port-and-ci.md](docs/research/windows-port-and-ci.md), not repeated here.
+
+**Decision: cross-compile Windows binaries from the same Linux box that already hosts Forgejo and its Actions runner, using mingw-w64, rather than standing up a native Windows CI runner.** There's no second machine to dedicate as a Windows runner, and the alternative — Forgejo's official `act_runner` is Linux-only, with Windows support existing only as an unofficial, alpha-quality community build ("should not be considered secure enough to deploy in production") — is worse than cross-compiling from infrastructure that already exists and is already trusted. This was the opposite of the first conclusion this research reached; revisited once the actual hardware constraint (no spare Windows machine) was clear, and the individual cross-compile risks turned out to be smaller than first assessed (see below).
+
+**Toolchain**:
+
+- **mingw-w64** (`gcc-mingw-w64-x86-64`/`g++-mingw-w64-x86-64`), targeting `x86_64-w64-mingw32`, for the app's own code and for cross-compiling vision.cpp/ggml.
+- **vcpkg's community `x64-mingw-dynamic` triplet**, chainloaded through a custom CMake toolchain file (`VCPKG_CHAINLOAD_TOOLCHAIN_FILE`), for the small vcpkg deps this repo already has: `giflib`, `vulkan`/`vulkan-headers`. Not covered by vcpkg's own CI, but these are small, portable C libraries with a long independent history of building under MinGW — low realistic risk despite the formal disclaimer.
+- **Qt6, via `aqtinstall` rather than building from source.** `aqtinstall` (`pip install aqtinstall`) fetches Qt's own official prebuilt Windows MinGW 64-bit binaries directly — the same archives the Qt Online Installer uses — regardless of what OS is doing the downloading. This sidesteps the single biggest from-source cross-compile risk entirely: no need to build all of Qt6 under an untested vcpkg triplet.
+- **Vulkan shader compilation (`glslc`) is not actually cross-compile-sensitive.** It compiles GLSL to target-agnostic SPIR-V bytecode as a build-time host step, and ggml's own CMake already has first-party support for this exact situation: `ExternalProject_Add` builds its `vulkan-shaders-gen` tool for the host specifically when `CMAKE_CROSSCOMPILING` is set. A native Linux Vulkan SDK/`glslc` install on the build image covers this.
+
+**Genuinely open unknowns, to resolve with a manual local spike before wiring up any CI**: whether vision.cpp's own `CMakeLists.txt` (not just bare ggml) cooperates with `CMAKE_CROSSCOMPILING` out of the box; whether vcpkg's mingw triplet builds `giflib`/the Vulkan loader without incident; and how to package the result, since `windeployqt.exe` is a Windows PE tool and won't run natively on the Linux build host (run it under Wine, or hardcode this app's small, fixed Qt DLL list — `Qt6Core`/`Gui`/`Widgets`/`Network`, `platforms/qwindows.dll`, plus the mingw runtime DLLs — as a CMake install step). None of these are exotic; expect a day or two of focused work with one or two fixable snags, not an open-ended research effort.
+
+**Steps, in order**:
+
+1. Do the cross-compile by hand on the homelab box first, outside any CI workflow, to actually resolve the unknowns above.
+2. Once that spike succeeds, capture the working toolchain in a Dockerfile (below) and build a purpose-built CI image, rather than reinstalling the toolchain from scratch on every job run.
+3. Push the image to Forgejo's own built-in container registry (no extra infra needed — it's already part of this project's Forgejo instance): `forgejo.yourdomain/you/ci-windows-cross:v1`.
+4. Add a `.forgejo/workflows/windows-cross-build.yaml` job with `runs-on: docker` and `container: image: forgejo.yourdomain/you/ci-windows-cross:v1`, wired up with the persistent caching below.
+5. Only then consider a Windows installer; PLAN.md's stated goal is a portable single `.exe` (windeployqt/manual-DLL-list output, zipped) to start, an installer (NSIS/WiX/Inno Setup) only if a real need shows up later.
+
+**Dockerfile for the CI image**:
+
+```dockerfile
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    cmake ninja-build \
+    gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+    ccache \
+    python3 python3-pip \
+    glslc \
+    && pip install --no-cache-dir --break-system-packages aqtinstall \
+    && rm -rf /var/lib/apt/lists/*
+```
+
+(`glslc` here is the Linux-native shader compiler, used as a host tool during the build, per the "not cross-compile-sensitive" point above — a native Vulkan SDK/loader isn't needed for the *cross-compiled* Windows binary itself, only for this build-time step.)
+
+**Persistent caching**, so CI doesn't recompile vision.cpp/ggml and vcpkg's deps from scratch on every run:
+
+1. Create two named Docker volumes on the DinD daemon the runner talks to: `docker volume create ci-ccache` and `docker volume create ci-vcpkg-cache`. (Named volumes avoid the UID/permission mismatches raw bind-mounts commonly hit here; their persistence depends on the DinD container's own `/var/lib/docker` itself being durable, worth confirming.)
+2. Allow-list both in the runner's `config.yaml`:
+   ```yaml
+   container:
+     valid_volumes:
+       - ci-ccache
+       - ci-vcpkg-cache
+   ```
+   and restart the runner for it to take effect.
+3. Reference them in the workflow job, with `CMAKE_C/CXX_COMPILER_LAUNCHER=ccache` (works transparently with the mingw cross-compiler — ccache just wraps whatever compiler command CMake invokes) and vcpkg's `files` binary-cache backend:
+   ```yaml
+   jobs:
+     windows-cross-build:
+       runs-on: docker
+       container:
+         image: forgejo.yourdomain/you/ci-windows-cross:v1
+         volumes:
+           - ci-ccache:/ccache
+           - ci-vcpkg-cache:/vcpkg-cache
+       env:
+         CCACHE_DIR: /ccache
+         CCACHE_MAXSIZE: 5G
+         VCPKG_BINARY_SOURCES: "clear;files,/vcpkg-cache,readwrite"
+       steps:
+         - uses: actions/checkout@v4
+           with:
+             submodules: recursive
+         - name: Configure
+           run: |
+             cmake --preset default \
+               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+         - name: Build
+           run: cmake --build build
+   ```
+   `ccache` evicts on its own once `CCACHE_MAXSIZE` is hit; vcpkg's `files` cache backend doesn't auto-evict, but with only three small vcpkg deps that's not a practical concern yet.
+
 ## v1 (MVP) scope: Linux only
 
 - Single image, drag-and-drop input.
@@ -95,7 +175,7 @@ One level down, the same idea again: `SegmentationModel`. `BackgroundRemovalStep
 4. ~~Video / GIF support~~ **GIF done; video still deferred.** `GifIO` (`src/core/GifIO.h`) reads animated GIF frames via Qt's decoder, runs each through the same `Pipeline`, and re-encodes as a new GIF via giflib. `BatchRunner` and `MainWindow`'s frame-cycling preview both support this. True video needs FFmpeg or similar and is out of scope for now, see "Video/GIF scope" above.
 5. ~~Model swappability~~ **Done.** See "Model management" above for the full design: a Settings dialog, per-model downloads into AppData, and live swap.
 6. Linux distro-native packages (deb/rpm) alongside the AppImage.
-7. Windows port (portable single .exe to start; installer only if a real need shows up).
+7. Windows port (portable single .exe to start; installer only if a real need shows up). Build/CI approach researched and decided: MinGW-w64 cross-compilation from the existing Linux Forgejo runner, see "Windows port: cross-compilation via MinGW-w64" above.
 8. macOS port, contingent on tester access.
 
 **Contingent, not on the list above**: colorizing black-and-white photos. Candidate model is DDColor (Apache-2.0), tentative. No GGUF weights exist for any permissively-licensed colorization model, so this needs a from-scratch PyTorch-to-GGUF conversion, comparable to BiRefNet's, gated behind a feasibility spike before it gets a firm slot, after distro packages and before the Windows port if it clears that spike.
