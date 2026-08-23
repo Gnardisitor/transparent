@@ -1,12 +1,22 @@
 #include "MainWindow.h"
 
+#include "core/BackgroundRemovalStep.h"
+#include "core/BokehStep.h"
 #include "core/GifIO.h"
 #include "core/ImageFormats.h"
+#include "core/ModelManager.h"
+#include "core/SegmentationModel.h"
+#include "core/UpscaleModel.h"
+#include "core/UpscaleStep.h"
+#include "core/VisionCppSegmentationModel.h"
+#include "core/VisionCppUpscaleModel.h"
+#include "ui/SettingsPage.h"
 #include "ui/SpinnerWidget.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QDialog>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -22,6 +32,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QResizeEvent>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QUrl>
@@ -47,8 +58,10 @@ QPixmap checkerboardPattern(int cell = 12) {
 
 } // namespace
 
-MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
-    : QMainWindow(parent), pipeline_(std::move(pipeline)), batchRunner_(pipeline_) {
+MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<ModelManager> modelManager,
+                        QWidget* parent)
+    : QMainWindow(parent), pipeline_(std::move(pipeline)), modelManager_(std::move(modelManager)),
+      batchRunner_(pipeline_) {
     setAcceptDrops(true);
     setWindowTitle(QStringLiteral("transparent"));
 
@@ -66,6 +79,19 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
                 "<p>Licensed under the GNU General Public License v3 (GPLv3). "
                 "Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, "
                 "Real-ESRGAN, giflib) keep their own licenses.</p>"));
+    });
+
+    // A top-level menu-bar action (next to Help), not a Simple/Advanced mode
+    // — model choice is a "set occasionally, then forget" preference, not a
+    // per-run one, so it shouldn't require leaving whatever mode you're
+    // already working in, or share the main window's image-drop status
+    // label. Opens settingsDialog_, built further down once settingsPage_
+    // exists.
+    QAction* settingsAction = menuBar()->addAction(QStringLiteral("Settings"));
+    connect(settingsAction, &QAction::triggered, this, [this]() {
+        settingsDialog_->show();
+        settingsDialog_->raise();
+        settingsDialog_->activateWindow();
     });
 
     auto* central = new QWidget(this);
@@ -133,6 +159,44 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
     advancedPage_->setVisible(false);
     layout->addWidget(advancedPage_);
 
+    // A separate top-level dialog rather than a page inside `central`: it
+    // has nothing to do with the current image (no drop-hint status label,
+    // no preview), so it shouldn't share the main window's layout. Not
+    // WA_DeleteOnClose — closing it (the X button, or Escape) just hides
+    // it, same as any settings panel you'd reopen later without losing its
+    // scroll position or in-flight download rows.
+    settingsPage_ = new SettingsPage(modelManager_.get());
+    connect(settingsPage_, &SettingsPage::modelSelected, this, &MainWindow::onModelSelected);
+    connect(settingsPage_, &SettingsPage::bokehStrengthChanged, this,
+            &MainWindow::onBokehStrengthChanged);
+    settingsDialog_ = new QDialog(this);
+    settingsDialog_->setWindowTitle(QStringLiteral("Settings"));
+    auto* settingsDialogLayout = new QVBoxLayout(settingsDialog_);
+    settingsDialogLayout->addWidget(settingsPage_);
+
+    if (modelManager_) {
+        // Reflects whatever main.cpp actually loaded (QSettings if
+        // something was persisted, the catalog default otherwise) so the
+        // dialog doesn't open with no radio selected. Guarded on
+        // modelManager_ so tests constructing MainWindow without one (e.g.
+        // test_main_window.cpp) don't touch real QSettings/user config.
+        QSettings settings;
+        settingsPage_->setActiveModel(
+            ModelCategory::Segmentation,
+            settings
+                .value(ModelCatalog::settingsKey(ModelCategory::Segmentation),
+                       ModelCatalog::defaultFilename(ModelCategory::Segmentation))
+                .toString());
+        settingsPage_->setActiveModel(
+            ModelCategory::Upscale,
+            settings
+                .value(ModelCatalog::settingsKey(ModelCategory::Upscale),
+                       ModelCatalog::defaultFilename(ModelCategory::Upscale))
+                .toString());
+        settingsPage_->setBokehStrength(
+            settings.value(BokehStep::settingsKey(), BokehStep::kDefaultStrengthPercent).toInt());
+    }
+
     previewLabel_ = new QLabel(this);
     previewLabel_->setAlignment(Qt::AlignCenter);
     previewLabel_->setMinimumSize(400, 300);
@@ -167,6 +231,12 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, QWidget* parent)
             &MainWindow::onProcessingFinished);
     connect(&gifProcessingWatcher_, &QFutureWatcher<std::vector<GifIO::Frame>>::finished, this,
             &MainWindow::onGifProcessingFinished);
+    connect(&segmentationModelWatcher_, &QFutureWatcher<std::shared_ptr<SegmentationModel>>::finished,
+            this, &MainWindow::onSegmentationModelLoaded);
+    connect(&upscaleModelWatcher_, &QFutureWatcher<std::shared_ptr<UpscaleModel>>::finished, this,
+            &MainWindow::onUpscaleModelLoaded);
+    connect(&bokehPreviewWatcher_, &QFutureWatcher<QImage>::finished, this,
+            &MainWindow::onBokehPreviewReady);
 
     // Single-shot and re-armed with the new current frame's own delay each
     // time it fires (advanceGifPreviewFrame), since GIF frames don't share
@@ -231,6 +301,53 @@ void MainWindow::populateAdvancedStepList() {
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(pipeline_->isStepEnabled(i) ? Qt::Checked : Qt::Unchecked);
     }
+}
+
+template <typename T>
+std::shared_ptr<T> MainWindow::findStepByName(const QString& name) const {
+    if (!pipeline_) {
+        return nullptr;
+    }
+    for (size_t i = 0; i < pipeline_->stepCount(); ++i) {
+        if (pipeline_->stepName(i) == name) {
+            return std::dynamic_pointer_cast<T>(pipeline_->stepAt(i));
+        }
+    }
+    return nullptr;
+}
+
+std::shared_ptr<BackgroundRemovalStep> MainWindow::backgroundRemovalStep() const {
+    return findStepByName<BackgroundRemovalStep>(QStringLiteral("Background Removal"));
+}
+
+std::shared_ptr<BokehStep> MainWindow::bokehStep() const {
+    return findStepByName<BokehStep>(QStringLiteral("Bokeh"));
+}
+
+std::shared_ptr<UpscaleStep> MainWindow::upscaleStep() const {
+    return findStepByName<UpscaleStep>(QStringLiteral("Upscale"));
+}
+
+bool MainWindow::isBokehTheActiveOutputStep() const {
+    if (!pipeline_) {
+        return false;
+    }
+    std::vector<size_t> order;
+    if (isAdvancedMode()) {
+        order = currentAdvancedStepOrder();
+    } else {
+        // Simple mode's operationCombo_ handler enables exactly one step;
+        // reprocess() then runs the plain Pipeline::run(input) overload,
+        // which just skips every disabled one — so "active" here means
+        // whichever single step is currently enabled.
+        for (size_t i = 0; i < pipeline_->stepCount(); ++i) {
+            if (pipeline_->isStepEnabled(i)) {
+                order.push_back(i);
+                break;
+            }
+        }
+    }
+    return !order.empty() && pipeline_->stepName(order.back()) == QStringLiteral("Bokeh");
 }
 
 bool MainWindow::isAdvancedMode() const {
@@ -303,13 +420,18 @@ void MainWindow::setControlsEnabled(bool enabled) {
     operationCombo_->setEnabled(enabled);
     advancedStepList_->setEnabled(enabled);
     startProcessingButton_->setEnabled(enabled);
+    // Covers both directions: processing an image disables model swapping,
+    // and (via onModelSelected/onSegmentationModelLoaded/
+    // onUpscaleModelLoaded below, which also route through here) swapping a
+    // model disables processing — so the two can never race each other.
+    settingsPage_->setBusy(!enabled);
     if (!enabled) {
         exportButton_->setEnabled(false);
     }
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent* event) {
-    if (processing_) {
+    if (processing_ || modelLoading_ || bokehPreviewInFlight_) {
         return;
     }
     const QMimeData* mime = event->mimeData();
@@ -344,7 +466,7 @@ void MainWindow::dropEvent(QDropEvent* event) {
 }
 
 void MainWindow::loadImage(const QString& path) {
-    if (processing_) {
+    if (processing_ || modelLoading_ || bokehPreviewInFlight_) {
         return;
     }
     stopGifPreviewAnimation();
@@ -387,7 +509,11 @@ void MainWindow::loadImage(const QString& path) {
 
 void MainWindow::reprocess() {
     const bool hasSource = isAnimatedGifSource_ ? !sourceGifFrames_.empty() : !sourceImage_.isNull();
-    if (!hasSource || processing_) {
+    // modelLoading_ too: pipeline steps' setModel() runs on the GUI thread
+    // once a swap lands, and this dispatches Pipeline::run() onto a
+    // background thread that reads those same steps' model pointers — the
+    // two must never overlap.
+    if (!hasSource || processing_ || modelLoading_ || bokehPreviewInFlight_) {
         return;
     }
     stopGifPreviewAnimation();
@@ -476,8 +602,131 @@ void MainWindow::onStartProcessingClicked() {
     reprocess();
 }
 
+void MainWindow::onModelSelected(ModelCategory category, QString filename) {
+    if (!modelManager_ || processing_ || modelLoading_ || bokehPreviewInFlight_ ||
+        !modelManager_->isInstalled(filename)) {
+        return;
+    }
+
+    modelLoading_ = true;
+    setControlsEnabled(false);
+    repositionOverlays();
+    spinner_->start();
+    statusLabel_->setText(QStringLiteral("Loading model..."));
+
+    const QString path = modelManager_->pathFor(filename);
+    if (category == ModelCategory::Segmentation) {
+        pendingSegmentationFilename_ = filename;
+        segmentationModelWatcher_.setFuture(
+            QtConcurrent::run([path]() -> std::shared_ptr<SegmentationModel> {
+                return std::make_shared<VisionCppSegmentationModel>(path);
+            }));
+    } else {
+        pendingUpscaleFilename_ = filename;
+        upscaleModelWatcher_.setFuture(QtConcurrent::run([path]() -> std::shared_ptr<UpscaleModel> {
+            return std::make_shared<VisionCppUpscaleModel>(path);
+        }));
+    }
+}
+
+void MainWindow::onSegmentationModelLoaded() {
+    const std::shared_ptr<SegmentationModel> model = segmentationModelWatcher_.result();
+    if (model && model->isReady()) {
+        // Bokeh always mirrors Background Removal's segmentation model —
+        // the mask it needs is exactly the one Background Removal already
+        // computes, so both steps get the same new model together.
+        if (auto step = backgroundRemovalStep()) {
+            step->setModel(model);
+        }
+        if (auto bokeh = bokehStep()) {
+            bokeh->setModel(model);
+        }
+        QSettings settings;
+        settings.setValue(ModelCatalog::settingsKey(ModelCategory::Segmentation),
+                           pendingSegmentationFilename_);
+        settingsPage_->setActiveModel(ModelCategory::Segmentation, pendingSegmentationFilename_);
+        statusLabel_->clear();
+    } else {
+        statusLabel_->setText(QStringLiteral("Could not load that model"));
+        // The radio button already flipped to the failed selection (Qt
+        // checks it on click, before modelSelected ever reaches here) — put
+        // it back on whatever's still actually running, which is exactly
+        // what QSettings still says since a failed load never writes to it.
+        QSettings settings;
+        settingsPage_->setActiveModel(
+            ModelCategory::Segmentation,
+            settings
+                .value(ModelCatalog::settingsKey(ModelCategory::Segmentation),
+                       ModelCatalog::defaultFilename(ModelCategory::Segmentation))
+                .toString());
+    }
+    modelLoading_ = false;
+    spinner_->stop();
+    setControlsEnabled(true);
+}
+
+void MainWindow::onUpscaleModelLoaded() {
+    const std::shared_ptr<UpscaleModel> model = upscaleModelWatcher_.result();
+    if (model && model->isReady()) {
+        if (auto step = upscaleStep()) {
+            step->setModel(model);
+        }
+        QSettings settings;
+        settings.setValue(ModelCatalog::settingsKey(ModelCategory::Upscale), pendingUpscaleFilename_);
+        settingsPage_->setActiveModel(ModelCategory::Upscale, pendingUpscaleFilename_);
+        statusLabel_->clear();
+    } else {
+        statusLabel_->setText(QStringLiteral("Could not load that model"));
+        QSettings settings;
+        settingsPage_->setActiveModel(
+            ModelCategory::Upscale,
+            settings
+                .value(ModelCatalog::settingsKey(ModelCategory::Upscale),
+                       ModelCatalog::defaultFilename(ModelCategory::Upscale))
+                .toString());
+    }
+    modelLoading_ = false;
+    spinner_->stop();
+    setControlsEnabled(true);
+}
+
+void MainWindow::onBokehStrengthChanged(int percent) {
+    QSettings settings;
+    settings.setValue(BokehStep::settingsKey(), percent);
+
+    const auto bokeh = bokehStep();
+    if (!bokeh) {
+        return;
+    }
+    // Takes effect on the step's next real process() call regardless of
+    // whether the live-preview branch below fires this time.
+    bokeh->setStrengthPercent(percent);
+
+    if (processing_ || modelLoading_ || bokehPreviewInFlight_ || !bokeh->hasCachedMask() ||
+        !isBokehTheActiveOutputStep()) {
+        return;
+    }
+    // `percent` is passed explicitly (not read back via bokeh->
+    // strengthPercent() on the worker thread) so this can't race a
+    // concurrent write to that member — not that one's possible anyway
+    // once bokehPreviewInFlight_ is set below, but reblendCached() is
+    // documented to take it this way regardless (see its own comment).
+    bokehPreviewInFlight_ = true;
+    bokehPreviewWatcher_.setFuture(
+        QtConcurrent::run([bokeh, percent]() -> QImage { return bokeh->reblendCached(percent); }));
+}
+
+void MainWindow::onBokehPreviewReady() {
+    bokehPreviewInFlight_ = false;
+    const QImage preview = bokehPreviewWatcher_.result();
+    if (!preview.isNull()) {
+        resultImage_ = preview;
+        updatePreview();
+    }
+}
+
 void MainWindow::onClearImageClicked() {
-    if (processing_) {
+    if (processing_ || modelLoading_ || bokehPreviewInFlight_) {
         return;
     }
     stopGifPreviewAnimation();
@@ -493,7 +742,7 @@ void MainWindow::onClearImageClicked() {
 }
 
 void MainWindow::runBatch(const QString& folderPath) {
-    if (processing_) {
+    if (processing_ || modelLoading_ || bokehPreviewInFlight_) {
         return;
     }
     if (!pipeline_ || pipeline_->stepCount() == 0) {

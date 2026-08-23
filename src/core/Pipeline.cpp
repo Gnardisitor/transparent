@@ -46,3 +46,7 @@ bool Pipeline::isStepEnabled(size_t index) const {
 void Pipeline::setStepEnabled(size_t index, bool enabled) {
     steps_.at(index).enabled = enabled;
 }
+
+std::shared_ptr<PipelineStep> Pipeline::stepAt(size_t index) const {
+    return steps_.at(index).step;
+}

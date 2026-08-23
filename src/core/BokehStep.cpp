@@ -3,13 +3,15 @@
 #include <QDebug>
 
 #include <algorithm>
+#include <cmath>
 
 namespace {
 
 // Separable box blur, clamped to the image edge. Three passes of a box blur
 // is a standard cheap approximation of a Gaussian blur, good enough for a
 // mask-only bokeh effect without pulling in a dedicated image-processing
-// dependency.
+// dependency. radius == 0 is a valid no-op (windowSize == 1, each output
+// pixel is just its own input pixel), used at 0% strength.
 QImage horizontalBoxBlur(const QImage& rgb, int radius) {
     const int width = rgb.width();
     const int height = rgb.height();
@@ -74,25 +76,33 @@ QImage boxBlur(const QImage& rgb, int radius) {
 
 } // namespace
 
-BokehStep::BokehStep(std::shared_ptr<SegmentationModel> model, int blurRadius)
-    : model_(std::move(model)), blurRadius_(std::max(0, blurRadius)) {}
+QString BokehStep::settingsKey() {
+    return QStringLiteral("bokeh/strengthPercent");
+}
 
-QImage BokehStep::process(const QImage& input) const {
-    if (!isReady() || input.isNull()) {
-        return input;
-    }
+BokehStep::BokehStep(std::shared_ptr<SegmentationModel> model, int strengthPercent)
+    : model_(std::move(model)), strengthPercent_(std::clamp(strengthPercent, 0, 100)) {}
 
-    const QImage mask = model_->computeMask(input);
-    if (mask.isNull() || mask.size() != input.size()) {
-        if (!mask.isNull()) {
-            qWarning() << "BokehStep: mask size" << mask.size() << "doesn't match input size"
-                       << input.size();
-        }
-        return input;
-    }
+void BokehStep::setModel(std::shared_ptr<SegmentationModel> model) {
+    model_ = std::move(model);
+    // A different model means a different mask — the cached one, if any, no
+    // longer corresponds to what this model would produce.
+    cachedInput_ = QImage();
+    cachedMask_ = QImage();
+}
 
+void BokehStep::setStrengthPercent(int percent) {
+    strengthPercent_ = std::clamp(percent, 0, 100);
+}
+
+int BokehStep::radiusForImage(const QImage& image, int strengthPercent) const {
+    const int shorterSide = std::min(image.width(), image.height());
+    return static_cast<int>(std::lround(std::clamp(strengthPercent, 0, 100) / 100.0 * 0.05 * shorterSide));
+}
+
+QImage BokehStep::blend(const QImage& input, const QImage& mask, int radius) const {
     const QImage sharp = input.convertToFormat(QImage::Format_RGB888);
-    const QImage blurred = boxBlur(sharp, blurRadius_);
+    const QImage blurred = boxBlur(sharp, radius);
     const QImage alphaMask = mask.convertToFormat(QImage::Format_Alpha8);
 
     const bool preserveAlpha = input.hasAlphaChannel();
@@ -121,4 +131,31 @@ QImage BokehStep::process(const QImage& input) const {
     }
 
     return output;
+}
+
+QImage BokehStep::process(const QImage& input) const {
+    if (!isReady() || input.isNull()) {
+        return input;
+    }
+
+    const QImage mask = model_->computeMask(input);
+    if (mask.isNull() || mask.size() != input.size()) {
+        if (!mask.isNull()) {
+            qWarning() << "BokehStep: mask size" << mask.size() << "doesn't match input size"
+                       << input.size();
+        }
+        return input;
+    }
+
+    cachedInput_ = input;
+    cachedMask_ = mask;
+
+    return blend(input, mask, radiusForImage(input, strengthPercent_));
+}
+
+QImage BokehStep::reblendCached(int strengthPercent) const {
+    if (cachedMask_.isNull() || cachedInput_.isNull()) {
+        return QImage();
+    }
+    return blend(cachedInput_, cachedMask_, radiusForImage(cachedInput_, strengthPercent));
 }

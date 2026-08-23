@@ -21,6 +21,10 @@ public:
     // to do about it (e.g. not adding this step to the pipeline at all).
     bool isReady() const { return model_ && model_->isReady(); }
 
+    // Swaps in a newly loaded model. The caller is responsible for loading
+    // it off the GUI thread first.
+    void setModel(std::shared_ptr<UpscaleModel> model) { model_ = std::move(model); }
+
 private:
     std::shared_ptr<UpscaleModel> model_;
 };

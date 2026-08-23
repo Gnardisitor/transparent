@@ -27,7 +27,7 @@ FetchContent_Declare(visioncpp
 )
 FetchContent_MakeAvailable(visioncpp)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Test)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Network Test)
 qt_standard_project_setup()
 
 # giflib (vcpkg, MIT): reads/writes the GIF container only, no quantizer of

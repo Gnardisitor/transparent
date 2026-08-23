@@ -11,13 +11,18 @@ add_library(transparent_core STATIC
   core/BatchRunner.cpp
   core/ImageFormats.cpp
   core/GifIO.cpp
+  core/ModelCatalog.cpp
+  core/ModelManager.cpp
 )
 target_include_directories(transparent_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(transparent_core PUBLIC Qt6::Gui visioncpp GIF::GIF)
+# Qt6::Network is here (not just on the executable) because ModelManager,
+# which downloads curated models on demand, lives in this library.
+target_link_libraries(transparent_core PUBLIC Qt6::Gui Qt6::Network visioncpp GIF::GIF)
 
 add_executable(transparent
   main.cpp
   ui/MainWindow.cpp
+  ui/SettingsPage.cpp
   ui/SpinnerWidget.cpp
 )
 target_link_libraries(transparent PRIVATE transparent_core Qt6::Widgets Qt6::Concurrent)

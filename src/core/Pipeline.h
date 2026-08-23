@@ -30,6 +30,12 @@ public:
     bool isStepEnabled(size_t index) const;
     void setStepEnabled(size_t index, bool enabled);
 
+    // The step object itself, type-erased same as addStep() took it.
+    // Callers that need to act on a specific concrete step (e.g. swapping a
+    // model into BackgroundRemovalStep from Settings) find it by name via
+    // stepName()/stepCount() and dynamic_pointer_cast the result.
+    std::shared_ptr<PipelineStep> stepAt(size_t index) const;
+
 private:
     struct Entry {
         std::shared_ptr<PipelineStep> step;

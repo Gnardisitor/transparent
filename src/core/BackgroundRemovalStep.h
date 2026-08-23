@@ -19,6 +19,12 @@ public:
     // to do about it (e.g. not adding this step to the pipeline at all).
     bool isReady() const { return model_ && model_->isReady(); }
 
+    // Swaps in a newly loaded model (e.g. the user picked a different one in
+    // Settings). The caller is responsible for loading it off the GUI
+    // thread first — construction (disk read, backend init, GPU pipeline
+    // setup) can take real time.
+    void setModel(std::shared_ptr<SegmentationModel> model) { model_ = std::move(model); }
+
 private:
     std::shared_ptr<SegmentationModel> model_;
 };
