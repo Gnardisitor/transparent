@@ -11,7 +11,7 @@ namespace {
 class MirrorStep : public PipelineStep {
 public:
     QImage process(const QImage& input) const override {
-        return input.flipped(Qt::Horizontal);
+        return input.mirrored(true, false);
     }
     QString name() const override { return QStringLiteral("Mirror"); }
 };
