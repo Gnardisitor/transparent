@@ -15,9 +15,6 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      # See ci.yml for why glslc comes from LunarG's repo instead of
-      # Ubuntu's own (too old for some shader variants ggml's Vulkan
-      # backend generates).
       - name: Add LunarG Vulkan SDK repository
         run: |
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
@@ -44,8 +41,6 @@ jobs:
           path: vcpkg/downloads
           key: vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
 
-      # See ci.yml for why this is cached separately from checkout's own
-      # submodules.
       - name: Cache FetchContent sources
         uses: actions/cache@v4
         with:
@@ -79,3 +74,4 @@ jobs:
           tag: ${{ github.event.release.tag_name }}
           release-dir: dist
           override: true
+

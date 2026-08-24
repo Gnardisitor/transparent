@@ -5,6 +5,7 @@ function(add_transparent_test test_name)
   target_link_libraries(${test_name} PRIVATE transparent_core Qt6::Test)
   target_include_directories(${test_name} PRIVATE ${CMAKE_SOURCE_DIR}/src)
   add_test(NAME ${test_name} COMMAND ${test_name})
+  set_tests_properties(${test_name} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endfunction()
 
 add_transparent_test(test_pipeline)
@@ -15,15 +16,7 @@ add_transparent_test(test_bokeh_step)
 add_transparent_test(test_gif_io)
 add_transparent_test(test_model_catalog)
 add_transparent_test(test_model_manager)
-set_tests_properties(test_model_manager PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
-# MainWindow.cpp only ever compiles into the `transparent` executable, not
-# the testable transparent_core library, so this one test target builds it
-# (plus SettingsPage.cpp and SpinnerWidget.cpp, its other UI dependencies)
-# directly, with the Widgets/Concurrent components already resolved by the
-# top-level find_package(Qt6 ...) call. QT_QPA_PLATFORM=offscreen so this
-# runs without a real display in CI, same as any other headless Qt Widgets
-# test.
 add_executable(test_main_window test_main_window.cpp
   ${CMAKE_SOURCE_DIR}/src/ui/MainWindow.cpp
   ${CMAKE_SOURCE_DIR}/src/ui/SettingsPage.cpp

@@ -19,13 +19,6 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      # Ubuntu's own glslc (universe, currently 2023.8) is too old for some
-      # shader variants vision.cpp/ggml's Vulkan backend generates (e.g. an
-      # fp16 "repeat" shader silently dropped instead of failing loudly,
-      # producing a link-time "undefined reference" rather than a build
-      # error) — pull glslc from LunarG's Vulkan SDK repo instead, the same
-      # fix llama.cpp's own official Vulkan Dockerfile uses for this exact
-      # backend.
       - name: Add LunarG Vulkan SDK repository
         run: |
           wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
@@ -52,11 +45,6 @@ jobs:
           path: vcpkg/downloads
           key: vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
 
-      # vision.cpp/ggml is pulled in via FetchContent (see CMakeLists.txt),
-      # not a git submodule of this repo, so actions/checkout's own
-      # `submodules: recursive` above doesn't cover it — without this cache,
-      # every run re-clones vision.cpp plus its own recursive submodules
-      # (the sizeable one being ggml/llama) from scratch.
       - name: Cache FetchContent sources
         uses: actions/cache@v4
         with:
@@ -75,3 +63,4 @@ jobs:
 
       - name: Run tests
         run: ctest --test-dir build --output-on-failure
+
