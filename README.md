@@ -54,6 +54,16 @@ Run the app:
 ./build/src/transparent
 ```
 
+## Packaging
+
+Build a portable AppImage (requires a Qt6 `qmake`/`qmake6` on `PATH`; downloads linuxdeploy + its Qt plugin into `packaging/tools/` on first run):
+
+```bash
+packaging/build-appimage.sh
+```
+
+The AppImage is written to `build/transparent-x86_64.AppImage`.
+
 ## Models
 
 Background removal uses [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) (MIT), converted to GGUF by [Acly](https://huggingface.co/Acly/BiRefNet-GGUF) for vision.cpp. Upscaling uses the `foolhardy_Remacri` [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) checkpoint (BSD-3-Clause), also converted to GGUF by [Acly](https://huggingface.co/Acly/Real-ESRGAN-GGUF). Weights aren't committed to this repo. [models/CMakeLists.txt](models/CMakeLists.txt) downloads and checksum-verifies them at configure time, the same way vision.cpp fetches its own default models.

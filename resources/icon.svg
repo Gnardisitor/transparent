@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <clipPath id="squareClip">
+      <rect x="8" y="8" width="240" height="240" rx="52"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#squareClip)">
+    <rect x="8" y="8" width="240" height="240" fill="#ffffff"/>
+    <rect x="8" y="8" width="120" height="120" fill="#3b82f6"/>
+    <rect x="128" y="128" width="120" height="120" fill="#3b82f6"/>
+  </g>
+  <rect x="8" y="8" width="240" height="240" rx="52" fill="none" stroke="#d7dce3" stroke-width="4"/>
+</svg>

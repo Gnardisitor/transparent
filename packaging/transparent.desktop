@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=transparent
+Comment=Local, GPU-accelerated background removal and image editing
+Exec=transparent
+Icon=transparent
+Categories=Graphics;Photography;
+Terminal=false

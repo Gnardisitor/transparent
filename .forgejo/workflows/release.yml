@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build_appimage:
+    name: Build and publish AppImage
+    runs-on: homelab
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            cmake ninja-build qt6-base-dev qt6-base-dev-tools \
+            glslc pkg-config curl zip unzip tar ccache
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ github.job }}-${{ github.sha }}
+          restore-keys: ccache-${{ github.job }}-
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@v4
+        with:
+          path: vcpkg/downloads
+          key: vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
+
+      - name: Configure
+        run: |
+          cmake --preset default \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build AppImage
+        run: packaging/build-appimage.sh
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          cp build/transparent-x86_64.AppImage \
+            "dist/transparent-${{ github.event.release.tag_name }}-x86_64.AppImage"
+          cd dist
+          sha256sum *.AppImage > SHA256SUMS
+
+      - name: Upload Release Assets
+        uses: actions/forgejo-release@v2.13.4
+        with:
+          direction: upload
+          repo: ${{ github.repository }}
+          token: ${{ secrets.TOKEN }}
+          tag: ${{ github.event.release.tag_name }}
+          release-dir: dist
+          override: true

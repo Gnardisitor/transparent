@@ -9,3 +9,7 @@ vcpkg_installed/
 # Model weights are fetched at CMake configure time (see models/CMakeLists.txt)
 # into the build directory, not committed — so nothing model-specific needs
 # excluding here beyond build/ above.
+
+# linuxdeploy + linuxdeploy-plugin-qt, fetched on demand by
+# packaging/build-appimage.sh (see that script).
+packaging/tools/

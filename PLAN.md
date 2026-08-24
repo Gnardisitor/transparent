@@ -81,7 +81,7 @@ One level down, the same idea again: `SegmentationModel`. `BackgroundRemovalStep
 
 ### Windows port: cross-compilation via MinGW-w64 from the existing Linux CI runner
 
-Researched and decided ahead of actually starting the Windows port (still gated behind Linux distro packages, see the deferred list below); full citations and the superseded native-runner analysis are in [docs/research/windows-port-and-ci.md](docs/research/windows-port-and-ci.md), not repeated here.
+Researched and decided ahead of actually starting the Windows port (still gated behind Linux distro packages, see the deferred list below).
 
 **Decision: cross-compile Windows binaries from the same Linux box that already hosts Forgejo and its Actions runner, using mingw-w64, rather than standing up a native Windows CI runner.** There's no second machine to dedicate as a Windows runner, and the alternative — Forgejo's official `act_runner` is Linux-only, with Windows support existing only as an unofficial, alpha-quality community build ("should not be considered secure enough to deploy in production") — is worse than cross-compiling from infrastructure that already exists and is already trusted. This was the opposite of the first conclusion this research reached; revisited once the actual hardware constraint (no spare Windows machine) was clear, and the individual cross-compile risks turned out to be smaller than first assessed (see below).
 
@@ -165,7 +165,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 - Background removal via BiRefNet-lite running on vision.cpp/Vulkan (CPU fallback if no Vulkan).
 - Minimal UI: open image, see transparent result, export. No library, no history, no batch queue yet.
 - Output: transparent PNG.
-- Packaging: AppImage, portable, no install/root required, avoids the sandboxing/GPU-passthrough overhead Flatpak would add. Distro-specific packages (deb/rpm) can follow later.
+- Packaging: AppImage, portable, no install/root required, avoids the sandboxing/GPU-passthrough overhead Flatpak would add. Distro-specific packages (deb/rpm) can follow later. **Done.** `packaging/build-appimage.sh` builds, `cmake --install`s into an AppDir, and runs linuxdeploy + linuxdeploy-plugin-qt against it, using the app icon and `.desktop` file in `resources/` and `packaging/`. Two quirks needed working around, both upstream packaging issues rather than anything in this app: linuxdeploy's bundled `strip` predates DT_RELR relative relocations (now default on current glibc/binutils toolchains) and aborts on any library built with one, worked around with `NO_STRIP=1`; and on distros where KDE's kimageformats package shares Qt's `plugins/imageformats` directory (e.g. Arch), several of its plugins have unresolvable dependencies on a stock install, worked around by excluding `kimg_*.so` from the Qt plugin deploy step since this app only needs Qt's own built-in image formats plus giflib for GIF. Verified end-to-end on this repo's own dev machine: produces a working AppImage that launches and detects Vulkan devices correctly.
 
 ## Deferred (post-Linux-MVP, roughly in order)
 
@@ -179,3 +179,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 8. macOS port, contingent on tester access.
 
 **Contingent, not on the list above**: colorizing black-and-white photos. Candidate model is DDColor (Apache-2.0), tentative. No GGUF weights exist for any permissively-licensed colorization model, so this needs a from-scratch PyTorch-to-GGUF conversion, comparable to BiRefNet's, gated behind a feasibility spike before it gets a firm slot, after distro packages and before the Windows port if it clears that spike.
+
+## CI/CD: Forgejo Actions
+
+This repo's remote (`forge.db-serve.com`) is a self-hosted Forgejo instance, not GitHub, so GitHub Actions doesn't apply. Forgejo Actions is GitHub-Actions-compatible (workflow YAML in `.forgejo/workflows/`), matching what this account's other repos (portfolio, resume-builder, pcb2blender) already run: `runs-on: homelab` against a self-hosted runner, `actions/checkout` + apt for dependencies, `secrets.TOKEN` for anything hitting the Forgejo API.
+
+- `.forgejo/workflows/ci.yml`: build + `ctest` on every push and PR. Installs Qt6/Ninja/glslc via apt, caches `ccache` and vcpkg's download cache across runs since a cold build compiles vision.cpp/ggml from source (Vulkan shader compilation included) and would otherwise redo that every run.
+- `.forgejo/workflows/release.yml`: on a published Forgejo release, runs `packaging/build-appimage.sh` and uploads the resulting AppImage (plus a SHA256SUMS file) as release assets via `actions/forgejo-release`, the same pattern resume-builder and pcb2blender use.
+
+Not yet verified against the actual runner (no access to it from this environment) — the apt package names in both workflows are the standard Debian/Ubuntu names but unconfirmed on `homelab` specifically; watch the first run.

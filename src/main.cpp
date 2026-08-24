@@ -9,6 +9,7 @@
 #include "ui/MainWindow.h"
 
 #include <QApplication>
+#include <QIcon>
 #include <QSettings>
 
 #include <memory>
@@ -17,6 +18,7 @@ int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("transparent"));
     QApplication::setOrganizationName(QStringLiteral("transparent"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/transparent.png")));
 
     // ModelManager's runtime models directory is QStandardPaths::
     // AppDataLocation, not the build tree — TRANSPARENT_MODELS_DIR is only
