@@ -32,8 +32,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ccache-${{ github.job }}-${{ github.sha }}
-          restore-keys: ccache-${{ github.job }}-
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
 
       - name: Cache vcpkg downloads
         uses: actions/cache@v4
