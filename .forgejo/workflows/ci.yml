@@ -19,11 +19,25 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      # Ubuntu's own glslc (universe, currently 2023.8) is too old for some
+      # shader variants vision.cpp/ggml's Vulkan backend generates (e.g. an
+      # fp16 "repeat" shader silently dropped instead of failing loudly,
+      # producing a link-time "undefined reference" rather than a build
+      # error) — pull glslc from LunarG's Vulkan SDK repo instead, the same
+      # fix llama.cpp's own official Vulkan Dockerfile uses for this exact
+      # backend.
+      - name: Add LunarG Vulkan SDK repository
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
+            sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list \
+            http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+
       - name: Install build dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
             cmake ninja-build qt6-base-dev qt6-base-dev-tools \
-            glslc pkg-config curl zip unzip tar ccache
+            vulkan-sdk pkg-config curl zip unzip tar ccache
 
       - name: Cache ccache
         uses: actions/cache@v4

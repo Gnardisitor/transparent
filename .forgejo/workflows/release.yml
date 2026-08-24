@@ -15,11 +15,21 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
+      # See ci.yml for why glslc comes from LunarG's repo instead of
+      # Ubuntu's own (too old for some shader variants ggml's Vulkan
+      # backend generates).
+      - name: Add LunarG Vulkan SDK repository
+        run: |
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
+            sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list \
+            http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+
       - name: Install build dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y \
             cmake ninja-build qt6-base-dev qt6-base-dev-tools \
-            glslc pkg-config curl zip unzip tar ccache
+            vulkan-sdk pkg-config curl zip unzip tar ccache
 
       - name: Cache ccache
         uses: actions/cache@v4
