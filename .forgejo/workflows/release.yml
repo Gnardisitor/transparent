@@ -44,9 +44,18 @@ jobs:
           path: vcpkg/downloads
           key: vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
 
+      # See ci.yml for why this is cached separately from checkout's own
+      # submodules.
+      - name: Cache FetchContent sources
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/visioncpp-src
+          key: fetchcontent-visioncpp-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Configure
         run: |
           cmake --preset default \
+            -DFETCHCONTENT_QUIET=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 

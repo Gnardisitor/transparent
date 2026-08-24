@@ -52,9 +52,21 @@ jobs:
           path: vcpkg/downloads
           key: vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
 
+      # vision.cpp/ggml is pulled in via FetchContent (see CMakeLists.txt),
+      # not a git submodule of this repo, so actions/checkout's own
+      # `submodules: recursive` above doesn't cover it — without this cache,
+      # every run re-clones vision.cpp plus its own recursive submodules
+      # (the sizeable one being ggml/llama) from scratch.
+      - name: Cache FetchContent sources
+        uses: actions/cache@v4
+        with:
+          path: build/_deps/visioncpp-src
+          key: fetchcontent-visioncpp-${{ hashFiles('CMakeLists.txt') }}
+
       - name: Configure
         run: |
           cmake --preset default \
+            -DFETCHCONTENT_QUIET=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
