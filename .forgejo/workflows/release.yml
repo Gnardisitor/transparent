@@ -28,7 +28,7 @@ jobs:
             build-essential cmake ninja-build qt6-base-dev qt6-base-dev-tools \
             libvulkan-dev vulkan-validationlayers glslang-tools glslc \
             breeze plasma-integration qt6-wayland \
-            pkg-config curl zip unzip tar ccache
+            pkg-config curl zip unzip tar ccache file
 
       - name: Cache ccache
         uses: actions/cache@v4
