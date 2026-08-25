@@ -41,10 +41,19 @@ jobs:
           path: vcpkg/downloads
           key: vcpkg-downloads-${{ hashFiles('vcpkg.json') }}
 
-      - name: Cache FetchContent sources
+      - name: Cache vcpkg binary cache
         uses: actions/cache@v4
         with:
-          path: build/_deps/visioncpp-src
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-archives-${{ hashFiles('vcpkg.json') }}
+
+      - name: Cache FetchContent sources and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/_deps/visioncpp-src
+            build/_deps/visioncpp-build
+            build/_deps/visioncpp-subbuild
           key: fetchcontent-visioncpp-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure

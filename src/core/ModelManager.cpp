@@ -9,11 +9,14 @@
 #include <QStandardPaths>
 #include <QUrl>
 
+#include <chrono>
 #include <memory>
 
 ModelManager::ModelManager(QString buildDefaultsDir, QObject* parent)
     : QObject(parent), buildDefaultsDir_(std::move(buildDefaultsDir)),
-      network_(new QNetworkAccessManager(this)) {}
+      network_(new QNetworkAccessManager(this)) {
+    network_->setTransferTimeout(std::chrono::seconds(30));
+}
 
 QString ModelManager::modelsDir() const {
     const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
@@ -79,8 +82,6 @@ void ModelManager::downloadModel(const ModelInfo& info) {
     QNetworkReply* reply = network_->get(QNetworkRequest(QUrl(info.url)));
     activeDownloads_.insert(info.filename);
 
-    // QNetworkReply doesn't redeclare readyRead itself, it's inherited from
-    // QIODevice, so the pointer-to-member has to name the base class here.
     connect(reply, &QIODevice::readyRead, this, [reply, file]() { file->write(reply->readAll()); });
     connect(reply, &QNetworkReply::downloadProgress, this,
             [this, filename = info.filename](qint64 received, qint64 total) {

@@ -1,15 +1,4 @@
 #!/usr/bin/env bash
-# Builds a portable Linux AppImage from an existing (or freshly configured)
-# build directory. See PLAN.md's "v1 (MVP) scope" for why AppImage over
-# Flatpak/distro packages: portable, no install/root, no sandboxing or
-# GPU-passthrough overhead.
-#
-# Usage: packaging/build-appimage.sh [build-dir]
-#
-# Downloads linuxdeploy + its Qt plugin (upstream continuous releases) into
-# packaging/tools/ on first run and reuses them after that. Requires a Qt6
-# qmake on PATH (qmake6 or qmake) so linuxdeploy-plugin-qt can find Qt's
-# libs/plugins to bundle.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,40 +41,50 @@ cmake --build "${build_dir}"
 rm -rf "${appdir}"
 cmake --install "${build_dir}" --prefix "${appdir}/usr"
 
-# linuxdeploy and its Qt plugin are themselves AppImages, normally mounted
-# via FUSE; CI runners commonly lack FUSE, so extract-and-run instead. The
-# env var (rather than the --appimage-extract-and-run CLI flag) is what
-# propagates to the plugin AppImage linuxdeploy launches as a subprocess.
 export APPIMAGE_EXTRACT_AND_RUN=1
-
-# The bundled `strip` in linuxdeploy's continuous release predates DT_RELR
-# (compact relative relocations, now default on current glibc/binutils e.g.
-# Arch): it aborts deployment entirely the moment it meets a `.relr.dyn`
-# section, which every system lib built by such a toolchain has. Skipping
-# strip is a functional no-op (a somewhat larger AppImage, nothing else)
-# since the executable itself already carries debug info by design
-# (CMAKE_BUILD_TYPE=RelWithDebInfo).
 export NO_STRIP=1
 
 cd "${build_dir}"
 
-# Deploying and packaging are split into three steps (rather than one
-# `linuxdeploy --plugin qt --output appimage` call) so the Qt plugin step
-# can exclude kimg_*.so: on distros where KDE's kimageformats package
-# shares Qt's plugins/imageformats directory (e.g. Arch), several of those
-# plugins (kimg_jxr.so among them) depend on libraries that aren't actually
-# resolvable on a stock install, which otherwise aborts deployment entirely
-# over image formats (JPEG-XR, PSD, RAW, ...) this app never reads or
-# writes — it only needs Qt's own built-in formats plus giflib for GIF.
 "${linuxdeploy}" \
   --appdir "${appdir}" \
   --executable "${appdir}/usr/bin/transparent" \
   --desktop-file "${repo_root}/packaging/transparent.desktop" \
-  --icon-file "${repo_root}/resources/icon.png"
+  --icon-file "${repo_root}/resources/icon.png" \
+  --custom-apprun "${repo_root}/packaging/AppRun.sh"
 
 "${linuxdeploy_qt}" \
   --appdir "${appdir}" \
   --exclude-library="kimg_*.so"
+
+qt_plugins_dir="$("${QMAKE}" -query QT_INSTALL_PLUGINS)"
+mapfile -t style_plugins < <(find "${qt_plugins_dir}/styles" -maxdepth 1 -iname '*.so' 2>/dev/null | sort)
+kde_platformtheme="$(find "${qt_plugins_dir}/platformthemes" -maxdepth 1 -iname '*kdeplasma*.so' 2>/dev/null | sort | head -n1)"
+kicon_engine="$(find "${qt_plugins_dir}" -path '*iconengines*' -iname 'kiconengineplugin*.so' 2>/dev/null | sort | head -n1)"
+
+if [[ "${#style_plugins[@]}" -gt 0 && -n "${kde_platformtheme}" ]]; then
+  echo "Bundling KDE Plasma theme integration: ${style_plugins[*]}, ${kde_platformtheme}"
+  mkdir -p "${appdir}/usr/plugins/styles" "${appdir}/usr/plugins/platformthemes"
+  bundle_args=(--library "${appdir}/usr/plugins/platformthemes/$(basename "${kde_platformtheme}")")
+  cp "${kde_platformtheme}" "${appdir}/usr/plugins/platformthemes/"
+  for style_plugin in "${style_plugins[@]}"; do
+    cp "${style_plugin}" "${appdir}/usr/plugins/styles/"
+    bundle_args+=(--library "${appdir}/usr/plugins/styles/$(basename "${style_plugin}")")
+  done
+  if [[ -n "${kicon_engine}" ]]; then
+    icon_engine_reldir="$(dirname "${kicon_engine#${qt_plugins_dir}/}")"
+    mkdir -p "${appdir}/usr/plugins/${icon_engine_reldir}"
+    cp "${kicon_engine}" "${appdir}/usr/plugins/${icon_engine_reldir}/"
+    bundle_args+=(--library "${appdir}/usr/plugins/${icon_engine_reldir}/$(basename "${kicon_engine}")")
+  fi
+  if [[ -d /usr/share/color-schemes ]]; then
+    mkdir -p "${appdir}/usr/share/color-schemes"
+    cp /usr/share/color-schemes/Breeze*.colors "${appdir}/usr/share/color-schemes/" 2>/dev/null || true
+  fi
+  "${linuxdeploy}" --appdir "${appdir}" "${bundle_args[@]}"
+else
+  echo "No KDE Plasma theme integration found on this build machine (looked in ${qt_plugins_dir}) — skipping, AppImage will use Qt's default look on KDE too"
+fi
 
 "${linuxdeploy}" \
   --appdir "${appdir}" \

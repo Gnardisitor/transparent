@@ -9,24 +9,37 @@
 #include "ui/MainWindow.h"
 
 #include <QApplication>
+#include <QCoreApplication>
+#include <QDir>
 #include <QIcon>
+#include <QNetworkProxyFactory>
 #include <QSettings>
 
 #include <memory>
 
+namespace {
+
+QString bundledModelsDefaultsDir() {
+    const QString installedDir =
+        QDir(QCoreApplication::applicationDirPath() +
+             QStringLiteral("/../share/transparent/models"))
+            .absolutePath();
+    if (QDir(installedDir).exists()) {
+        return installedDir;
+    }
+    return QStringLiteral(TRANSPARENT_MODELS_DIR);
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("transparent"));
-    QApplication::setOrganizationName(QStringLiteral("transparent"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/transparent.png")));
 
-    // ModelManager's runtime models directory is QStandardPaths::
-    // AppDataLocation, not the build tree — TRANSPARENT_MODELS_DIR is only
-    // used here, to give a fresh build a working first run without any
-    // network access: ensureDefaultsProvisioned() copies the two
-    // CMake-time-downloaded defaults into AppData if they aren't already
-    // there. See PLAN.md's Model management section.
-    auto modelManager = std::make_shared<ModelManager>(QStringLiteral(TRANSPARENT_MODELS_DIR));
+    QNetworkProxyFactory::setUseSystemConfiguration(true);
+
+    auto modelManager = std::make_shared<ModelManager>(bundledModelsDefaultsDir());
     modelManager->ensureDefaultsProvisioned();
 
     QSettings settings;
@@ -59,16 +72,10 @@ int main(int argc, char** argv) {
         pipeline->addStep(upscale);
     }
 
-    // Reuses the same segmentation model as background removal: the mask it
-    // already produces is exactly what a mask-only bokeh effect needs, no
-    // separate depth model required for this first cut (see PLAN.md).
     auto bokeh = std::make_shared<BokehStep>(segmentationModel, bokehStrengthPercent);
     if (bokeh->isReady()) {
         pipeline->addStep(bokeh);
     }
-    // Which step ends up enabled by default (Background Removal) is decided
-    // by MainWindow, which re-derives it from each step's name every time it
-    // builds the operation dropdown — not here.
 
     MainWindow window(pipeline, modelManager);
     window.resize(900, 700);
