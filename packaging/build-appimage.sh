@@ -83,7 +83,27 @@ if [[ "${#style_plugins[@]}" -gt 0 && -n "${kde_platformtheme}" ]]; then
   fi
   "${linuxdeploy}" --appdir "${appdir}" "${bundle_args[@]}"
 else
-  echo "No KDE Plasma theme integration found on this build machine (looked in ${qt_plugins_dir}) — skipping, AppImage will use Qt's default look on KDE too"
+  echo "No KDE Plasma theme integration found on this build machine (looked in ${qt_plugins_dir}) — skipping, AppImage falls back to the bundled QDarkStyleSheet look"
+fi
+
+wayland_platform="$(find "${qt_plugins_dir}/platforms" -maxdepth 1 -iname '*wayland*.so' 2>/dev/null | sort | head -n1)"
+if [[ -n "${wayland_platform}" ]]; then
+  echo "Bundling Wayland platform support: ${wayland_platform}"
+  bundle_args=()
+  for category in platforms wayland-decoration-client wayland-graphics-integration-client wayland-shell-integration; do
+    mapfile -t category_plugins < <(find "${qt_plugins_dir}/${category}" -maxdepth 1 -iname '*.so' 2>/dev/null | sort)
+    [[ "${#category_plugins[@]}" -eq 0 ]] && continue
+    mkdir -p "${appdir}/usr/plugins/${category}"
+    for plugin in "${category_plugins[@]}"; do
+      plugin_name="$(basename "${plugin}")"
+      [[ "${category}" == "platforms" && "${plugin_name}" != *wayland* ]] && continue
+      cp "${plugin}" "${appdir}/usr/plugins/${category}/"
+      bundle_args+=(--library "${appdir}/usr/plugins/${category}/${plugin_name}")
+    done
+  done
+  "${linuxdeploy}" --appdir "${appdir}" "${bundle_args[@]}"
+else
+  echo "No Wayland platform plugin found on this build machine (looked in ${qt_plugins_dir}/platforms) — skipping, AppImage falls back to XWayland"
 fi
 
 "${linuxdeploy}" \

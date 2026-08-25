@@ -8,25 +8,27 @@ jobs:
   build_appimage:
     name: Build and publish AppImage
     runs-on: homelab
+    container:
+      image: debian:trixie
     steps:
+      - name: Install git and Node.js
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates nodejs
+
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           persist-credentials: false
           submodules: recursive
 
-      - name: Add LunarG Vulkan SDK repository
-        run: |
-          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc | \
-            sudo tee /etc/apt/trusted.gpg.d/lunarg.asc > /dev/null
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list \
-            http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
-
       - name: Install build dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y \
+          apt-get update && apt-get install -y \
             cmake ninja-build qt6-base-dev qt6-base-dev-tools \
-            vulkan-sdk pkg-config curl zip unzip tar ccache
+            libvulkan-dev vulkan-validationlayers glslang-tools \
+            breeze plasma-integration qt6-wayland \
+            pkg-config curl zip unzip tar ccache
 
       - name: Cache ccache
         uses: actions/cache@v4
@@ -47,13 +49,10 @@ jobs:
           path: ~/.cache/vcpkg/archives
           key: vcpkg-archives-${{ hashFiles('vcpkg.json') }}
 
-      - name: Cache FetchContent sources and build
+      - name: Cache FetchContent sources
         uses: actions/cache@v4
         with:
-          path: |
-            build/_deps/visioncpp-src
-            build/_deps/visioncpp-build
-            build/_deps/visioncpp-subbuild
+          path: build/_deps/visioncpp-src
           key: fetchcontent-visioncpp-${{ hashFiles('CMakeLists.txt') }}
 
       - name: Configure
@@ -83,4 +82,3 @@ jobs:
           tag: ${{ github.event.release.tag_name }}
           release-dir: dist
           override: true
-

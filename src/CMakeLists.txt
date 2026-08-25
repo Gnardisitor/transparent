@@ -24,7 +24,9 @@ add_executable(transparent
   ui/MainWindow.cpp
   ui/SettingsPage.cpp
   ui/SpinnerWidget.cpp
+  ui/Theme.cpp
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
+  ${CMAKE_SOURCE_DIR}/resources/qdarkstyle.qrc
 )
 target_link_libraries(transparent PRIVATE transparent_core Qt6::Widgets Qt6::Concurrent)
 target_compile_definitions(transparent PRIVATE
