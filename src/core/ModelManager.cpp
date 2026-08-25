@@ -9,13 +9,12 @@
 #include <QStandardPaths>
 #include <QUrl>
 
-#include <chrono>
 #include <memory>
 
 ModelManager::ModelManager(QString buildDefaultsDir, QObject* parent)
     : QObject(parent), buildDefaultsDir_(std::move(buildDefaultsDir)),
       network_(new QNetworkAccessManager(this)) {
-    network_->setTransferTimeout(std::chrono::seconds(30));
+    network_->setTransferTimeout(30000);
 }
 
 QString ModelManager::modelsDir() const {
