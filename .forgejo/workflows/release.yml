@@ -25,8 +25,8 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update && apt-get install -y \
-            cmake ninja-build qt6-base-dev qt6-base-dev-tools \
-            libvulkan-dev vulkan-validationlayers glslang-tools \
+            build-essential cmake ninja-build qt6-base-dev qt6-base-dev-tools \
+            libvulkan-dev vulkan-validationlayers glslang-tools glslc \
             breeze plasma-integration qt6-wayland \
             pkg-config curl zip unzip tar ccache
 
