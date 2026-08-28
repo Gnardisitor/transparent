@@ -16,19 +16,15 @@ struct Rgb {
     uint8_t r, g, b;
 };
 
-// Median-cut color quantization, capped at maxColors. Operates on a flat,
-// bounded sample of opaque pixels drawn from every frame combined, so all
-// frames of one GIF share a single global color table instead of each
-// getting (and paying the encoding cost of) its own local one.
+// Median-cut quantization capped at maxColors, over a bounded sample of
+// opaque pixels from all frames combined so they share one color table.
 std::vector<Rgb> quantize(std::vector<Rgb> pixels, int maxColors) {
     if (pixels.empty()) {
         return {Rgb{0, 0, 0}};
     }
 
-    // Buckets are contiguous ranges [begin, end) within `pixels`, split
-    // repeatedly along whichever bucket+channel currently has the widest
-    // value spread until there are maxColors of them (or every bucket is
-    // down to a single pixel and can't be split further).
+    // Split the bucket with the widest channel spread until there are
+    // maxColors buckets.
     struct Bucket {
         int begin;
         int end;
@@ -73,8 +69,7 @@ std::vector<Rgb> quantize(std::vector<Rgb> pixels, int maxColors) {
                       return channelValue(a, bestChannel) < channelValue(z, bestChannel);
                   });
         const int mid = range.begin + (range.end - range.begin) / 2;
-        // push_back may reallocate buckets' storage, so this indexes fresh
-        // afterward instead of writing through a reference taken before it.
+        // push_back may reallocate, so index buckets fresh afterward.
         buckets.push_back({mid, range.end});
         buckets[splitIdx].end = mid;
     }
@@ -95,9 +90,7 @@ std::vector<Rgb> quantize(std::vector<Rgb> pixels, int maxColors) {
     return palette;
 }
 
-// Nearest color within palette[0, searchCount) (the real, non-transparent,
-// non-padding entries) by squared Euclidean distance, cached by exact input
-// color since real images repeat colors constantly.
+// Nearest palette color by squared distance, cached by input color.
 int nearestPaletteIndex(const std::vector<Rgb>& palette, int searchCount, Rgb color,
                          std::unordered_map<uint32_t, int>& cache) {
     const uint32_t key =
@@ -147,9 +140,8 @@ std::vector<Frame> readFrames(const QString& path) {
         Frame frame;
         frame.image = image.convertToFormat(QImage::Format_RGBA8888);
         const int delayMs = reader.nextImageDelay();
-        // 0 (or unreported) delay means "as fast as possible"; most viewers
-        // substitute a small default instead of a literal 0, so this does
-        // too rather than writing a delay GIF players will special-case.
+        // 0 delay means "as fast as possible"; write a small default instead
+        // of a delay GIF players special-case.
         frame.delayCs = delayMs > 0 ? std::max(1, delayMs / 10) : 10;
         frames.push_back(std::move(frame));
         image = reader.read();
@@ -168,9 +160,8 @@ bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
         return false;
     }
 
-    // One shared palette across every frame, built from a bounded sample of
-    // opaque pixels so quantization cost doesn't scale with resolution *
-    // frame count.
+    // One shared palette, built from a bounded sample so quantization cost
+    // doesn't scale with resolution * frame count.
     constexpr int kMaxSamples = 20000;
     const int perFrameBudget = std::max(1, kMaxSamples / static_cast<int>(frames.size()));
     std::vector<Rgb> samples;
@@ -190,9 +181,7 @@ bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
         }
     }
 
-    // Reserve one palette slot for transparency (GIF has no soft alpha —
-    // BackgroundRemovalStep's smooth mask edge gets thresholded here) so
-    // there's somewhere for it to point.
+    // Reserve a palette slot for transparency when needed.
     const int maxColors = anyTransparent ? 255 : 256;
     std::vector<Rgb> palette = quantize(std::move(samples), maxColors);
     const int realColorCount = static_cast<int>(palette.size());
@@ -225,15 +214,13 @@ bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
         return false;
     }
 
-    // Background index matches the transparent slot (when there is one) so
-    // DISPOSE_BACKGROUND below clears to "nothing" between frames instead of
-    // a solid palette color.
+    // Background index matches the transparent slot so DISPOSE_BACKGROUND
+    // clears to nothing between frames.
     const int backgroundIndex = transparentIndex >= 0 ? transparentIndex : 0;
     bool ok = EGifPutScreenDesc(gif, width, height, GifBitSize(colorCount), backgroundIndex,
                                  colorMap) == GIF_OK;
 
-    // NETSCAPE2.0 application extension: the de facto standard way to make
-    // an animated GIF loop forever instead of playing once.
+    // NETSCAPE2.0 extension: makes an animated GIF loop forever.
     if (ok) {
         static const unsigned char kNetscape[] = {'N', 'E', 'T', 'S', 'C', 'A', 'P',
                                                     'E', '2', '.', '0'};
@@ -265,12 +252,9 @@ bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
         }
 
         GraphicsControlBlock gcb{};
-        // Every frame here is a complete, independently-processed image
-        // (not a delta against the previous one), so each frame must clear
-        // to background first — DISPOSE_DO_NOT would let a transparent
-        // pixel reveal whatever the *previous* frame drew underneath it,
-        // ghosting stale content through wherever the current frame's
-        // subject silhouette doesn't cover.
+        // Each frame is a complete image, not a delta, so it must clear to
+        // background first; DISPOSE_DO_NOT would ghost previous frames
+        // through transparent pixels.
         gcb.DisposalMode = DISPOSE_BACKGROUND;
         gcb.DelayTime = frames[frameIdx].delayCs;
         gcb.TransparentColor = transparentIndex >= 0 ? transparentIndex : NO_TRANSPARENT_COLOR;

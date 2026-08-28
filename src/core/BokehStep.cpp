@@ -7,11 +7,8 @@
 
 namespace {
 
-// Separable box blur, clamped to the image edge. Three passes of a box blur
-// is a standard cheap approximation of a Gaussian blur, good enough for a
-// mask-only bokeh effect without pulling in a dedicated image-processing
-// dependency. radius == 0 is a valid no-op (windowSize == 1, each output
-// pixel is just its own input pixel), used at 0% strength.
+// Separable box blur, clamped to the image edge. Three passes approximate
+// a Gaussian cheaply. radius == 0 is a no-op, used at 0% strength.
 QImage horizontalBoxBlur(const QImage& rgb, int radius) {
     const int width = rgb.width();
     const int height = rgb.height();
@@ -85,8 +82,7 @@ BokehStep::BokehStep(std::shared_ptr<SegmentationModel> model, int strengthPerce
 
 void BokehStep::setModel(std::shared_ptr<SegmentationModel> model) {
     model_ = std::move(model);
-    // A different model means a different mask — the cached one, if any, no
-    // longer corresponds to what this model would produce.
+    // Different model, different mask; drop the cache.
     cachedInput_ = QImage();
     cachedMask_ = QImage();
 }

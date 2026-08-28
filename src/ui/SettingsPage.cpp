@@ -58,8 +58,7 @@ SettingsPage::SettingsPage(ModelManager* modelManager, QWidget* parent)
 QWidget* SettingsPage::buildCategorySection(ModelCategory category, const QString& title) {
     auto* box = new QGroupBox(title, this);
     auto* layout = new QVBoxLayout(box);
-    // Scoped to this one category's QGroupBox, so Segmentation and Upscale
-    // rows never compete for the same exclusive selection.
+    // One button group per category, so the two lists don't compete.
     auto* group = new QButtonGroup(box);
 
     for (const ModelInfo& info : ModelCatalog::modelsForCategory(category)) {
@@ -122,8 +121,7 @@ QWidget* SettingsPage::buildBokehStrengthSection() {
         bokehStrengthValueLabel_->setText(QStringLiteral("%1%").arg(value));
         emit bokehStrengthChanged(value);
     });
-    // Slider starts at 0 before setBokehStrength() sets its real value —
-    // this just keeps the label from reading "0%" for one paint.
+    // Avoids a one-paint "0%" label before setBokehStrength() runs.
     bokehStrengthValueLabel_->setText(QStringLiteral("%1%").arg(bokehStrengthSlider_->value()));
 
     return box;
@@ -154,8 +152,7 @@ void SettingsPage::setActiveModel(ModelCategory category, const QString& filenam
     if (it == rows_.constEnd()) {
         return;
     }
-    // Reflects state without re-emitting modelSelected — this is MainWindow
-    // telling the page what's active, not the user picking something.
+    // Reporting state, not a user pick; don't re-emit.
     const QSignalBlocker blocker(it->radio);
     it->radio->setChecked(true);
 }

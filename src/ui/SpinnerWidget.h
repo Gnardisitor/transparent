@@ -4,9 +4,7 @@
 
 class QTimer;
 
-// Minimal indeterminate "busy" spinner: a rotating partial ring driven by an
-// internal QTimer. No image assets — just QPainter — so it can be dropped
-// anywhere (e.g. floated over the preview image) without extra resources.
+// Minimal indeterminate spinner drawn with QPainter, no image assets.
 class SpinnerWidget : public QWidget {
     Q_OBJECT
 

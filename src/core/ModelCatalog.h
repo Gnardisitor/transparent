@@ -4,18 +4,13 @@
 
 #include <vector>
 
-// Which pipeline step a model belongs to. Segmentation backs both
-// BackgroundRemovalStep and BokehStep (they share one SegmentationModel);
-// Upscale backs UpscaleStep.
+// Segmentation backs both BackgroundRemovalStep and BokehStep (they share
+// one SegmentationModel); Upscale backs UpscaleStep.
 enum class ModelCategory { Segmentation, Upscale };
 
-// One curated, downloadable model checkpoint. Every field here is fixed at
-// compile time (name, license, size, URL, checksum) — this is the "curated
-// registry, not free-form file browsing" design from PLAN.md's Model
-// management section. `filename` doubles as the on-disk identity: whether a
-// model is installed is decided purely by matching this against what's
-// actually present in ModelManager's models directory, so a manually placed
-// file is picked up the same way a downloaded one is.
+// One curated, downloadable model checkpoint, fixed at compile time.
+// `filename` doubles as the on-disk identity: a model counts as installed
+// purely by matching this name in the models directory.
 struct ModelInfo {
     ModelCategory category;
     QString displayName;
@@ -42,9 +37,8 @@ const ModelInfo* findByFilename(const QString& filename);
 // QSettings yet, or when a persisted choice no longer matches a known model.
 QString defaultFilename(ModelCategory category);
 
-// QSettings key each category's active-model filename is persisted under.
-// One place for this so main.cpp (reading it at startup) and MainWindow
-// (writing it after a live swap) can't drift apart.
+// QSettings key each category's active-model filename is persisted under,
+// shared by main.cpp and MainWindow.
 QString settingsKey(ModelCategory category);
 
 } // namespace ModelCatalog

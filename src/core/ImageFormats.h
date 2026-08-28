@@ -3,9 +3,7 @@
 #include <QString>
 #include <QStringList>
 
-// The single list of image extensions this app knows how to open, shared by
-// MainWindow's single-file drop handling and BatchRunner's folder scan so
-// the two paths can't silently drift apart.
+// The one extension list shared by drop handling and batch scanning.
 namespace ImageFormats {
 
 QStringList supportedExtensions();

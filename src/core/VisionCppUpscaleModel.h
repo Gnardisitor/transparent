@@ -9,9 +9,8 @@
 
 #include <optional>
 
-// vision.cpp (ggml-based, MIT, CPU + Vulkan) adapter for the UpscaleModel
-// seam — runs a Real-ESRGAN-family GGUF model (see esrgan_load_model: plain
-// ESRGAN/Real-ESRGAN variants only, not the "plus"/pixel-shuffle family).
+// vision.cpp (ggml-based, MIT) adapter for the UpscaleModel seam, running
+// Real-ESRGAN-family GGUFs (plain variants only, not "plus"/pixel-shuffle).
 class VisionCppUpscaleModel : public UpscaleModel {
 public:
     explicit VisionCppUpscaleModel(QString modelPath);
@@ -21,9 +20,8 @@ public:
 
 private:
     QString modelPath_;
-    // Optional so a backend_init() failure (e.g. no usable device at all)
-    // can be caught and leave the object in a valid "not ready" state,
-    // rather than escaping the constructor as an uncaught exception.
+    // Optional so a backend_init() failure leaves a valid not-ready object
+    // instead of escaping the constructor as an exception.
     std::optional<visp::backend_device> backend_;
     mutable visp::esrgan_model model_;
     bool ready_ = false;

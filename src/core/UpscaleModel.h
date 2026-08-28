@@ -2,16 +2,12 @@
 
 #include <QImage>
 
-// The seam between an UpscaleStep (which only knows how to rebuild the alpha
-// channel around a resized RGB image) and whatever inference runtime actually
-// performs the upscale, mirroring SegmentationModel's role for background
-// removal.
+// The seam between UpscaleStep and whatever runtime performs the upscale.
 class UpscaleModel {
 public:
     virtual ~UpscaleModel() = default;
 
-    // False if the model failed to load. Callers decide what to do about it
-    // (e.g. not adding the owning PipelineStep to the pipeline at all).
+    // False if the model failed to load.
     virtual bool isReady() const = 0;
 
     // Upscales `input`'s RGB channels by the model's fixed scale factor

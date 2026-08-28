@@ -26,11 +26,8 @@ QImage VisionCppUpscaleModel::upscale(const QImage& input) const {
     const int width = rgbInput.width();
     const int height = rgbInput.height();
 
-    // See VisionCppSegmentationModel::computeMask(): vision.cpp's image_view
-    // -> image_source conversion silently truncates the row stride whenever
-    // Qt's own scanline padding isn't a whole pixel, corrupting row
-    // addressing for most real photo widths. Repack into a tight buffer so
-    // the stride is always an exact multiple of 3 bytes/pixel.
+    // Same Qt-scanline-padding stride bug as
+    // VisionCppSegmentationModel::computeMask(); repack tightly.
     std::vector<uint8_t> packed(static_cast<size_t>(width) * height * 3);
     for (int y = 0; y < height; ++y) {
         std::memcpy(packed.data() + static_cast<size_t>(y) * width * 3, rgbInput.constScanLine(y),

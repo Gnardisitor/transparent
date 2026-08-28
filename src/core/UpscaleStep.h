@@ -5,11 +5,8 @@
 
 #include <memory>
 
-// Model-agnostic: hands RGB pixels to an UpscaleModel and rebuilds the alpha
-// channel by scaling the input's own alpha up to match, since super-
-// resolution models only ever operate on RGB. Keeping that recombination
-// here (rather than inside the model) means a prior BackgroundRemovalStep's
-// transparency survives regardless of which step runs first.
+// Model-agnostic: upscales RGB via the model, then rescales the input's own
+// alpha to match, so transparency from earlier steps survives.
 class UpscaleStep : public PipelineStep {
 public:
     explicit UpscaleStep(std::shared_ptr<UpscaleModel> model);
@@ -17,12 +14,10 @@ public:
     QImage process(const QImage& input) const override;
     QString name() const override { return QStringLiteral("Upscale"); }
 
-    // False if the underlying model failed to load. The caller decides what
-    // to do about it (e.g. not adding this step to the pipeline at all).
+    // False if the underlying model failed to load.
     bool isReady() const { return model_ && model_->isReady(); }
 
-    // Swaps in a newly loaded model. The caller is responsible for loading
-    // it off the GUI thread first.
+    // The caller loads the new model off the GUI thread first.
     void setModel(std::shared_ptr<UpscaleModel> model) { model_ = std::move(model); }
 
 private:

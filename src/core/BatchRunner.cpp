@@ -32,9 +32,8 @@ BatchResult BatchRunner::run(const QString& inputFolder, const QString& outputFo
     const QDir outputDir(outputFolder);
 
     BatchResult result;
-    // Two source files that only differ by extension (cat.png and cat.jpg)
-    // both map to the same "<basename>.png" output: track claimed names so
-    // the second one fails instead of silently overwriting the first.
+    // cat.png and cat.jpg both map to cat.png; the second one fails
+    // instead of silently overwriting the first.
     QSet<QString> claimedOutputNames;
     for (int i = 0; i < images.size(); ++i) {
         const QFileInfo info(images[i]);

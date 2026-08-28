@@ -2,16 +2,16 @@
 
 ## Motivation
 
-Existing local background-removal tools are bad: broken or missing GPU acceleration on Linux, a poor fit for the OS, and constant subscription nagging. Web tools are worse. This started as a local-first, offline alternative built to work well on Linux first. It's grown into a broader image-editing toolkit (background removal, upscaling, bokeh, and more), all on the same pipeline-step architecture and the same no-cloud, no-subscription, no-telemetry rules.
+Existing local background-removal tools are bad. They have broken or missing GPU acceleration on Linux, they fit the OS poorly, and they nag for subscriptions. Web tools are worse. This started as a local-first, offline alternative built to work well on Linux first. It has grown into a broader image-editing toolkit (background removal, upscaling, bokeh, and more) on one pipeline-step architecture and the same no-cloud, no-subscription, no-telemetry rules.
 
 ## Project intent
 
 - Personal tool first, with intent to open-source once it works.
 - Free. No subscription, no cloud calls, no telemetry.
-- License: your code under GPLv3 (see [LICENSE](LICENSE)).
-  - Originally planned as LGPLv3, to match Qt's own license. LGPL exists so other people's proprietary software can link against your code without inheriting your license, that's why Qt itself is LGPL. `transparent` is an application, not a library other codebases link into, so that reason doesn't apply here. GPLv3 does what was actually wanted: anyone distributing a modified version has to share the source back under the same terms. GPLv3 over GPLv2 for the explicit patent grant; nothing here needs GPLv2 compatibility.
-  - Compatible with dynamically-linked LGPLv3 Qt and MIT-licensed vision.cpp/BiRefNet-lite: GPL projects commonly dynamically link LGPL libraries.
-  - Bundled components keep their own licenses (Qt: LGPLv3, dynamically linked; vision.cpp/ggml: MIT; BiRefNet-lite: MIT), listed in-repo and in the About screen.
+- License: GPLv3 for this repo's own code (see [LICENSE](LICENSE)).
+  - Originally planned as LGPLv3 to match Qt's own license. LGPL exists so proprietary software can link against your code without inheriting your license, which is why Qt itself is LGPL. `transparent` is an application, not a library, so that reason does not apply. GPLv3 requires anyone distributing a modified version to share the source under the same terms, which is what was actually wanted. It was chosen over GPLv2 for the explicit patent grant. Nothing here needs GPLv2 compatibility.
+  - Compatible with dynamically-linked LGPLv3 Qt and MIT-licensed vision.cpp/BiRefNet-lite. GPL projects commonly dynamically link LGPL libraries.
+  - Bundled components keep their own licenses (Qt LGPLv3 dynamically linked, vision.cpp/ggml MIT, BiRefNet-lite MIT). They are listed in-repo and in the About screen.
 
 ## Platform rollout (sequential, not parallel)
 
@@ -21,29 +21,29 @@ Existing local background-removal tools are bad: broken or missing GPU accelerat
 
 ## Architecture decisions
 
-### Inference engine: vision.cpp + Vulkan backend
+### Inference engine (vision.cpp + Vulkan)
 
-vision.cpp (Acly, ggml-based, MIT) runs everything through a single Vulkan backend: vendor-neutral GPU acceleration across NVIDIA/AMD/Intel with no per-vendor branching, the same approach Upscayl and chaiNNer use. ggml's CPU backend is the automatic fallback when no Vulkan device is available.
+vision.cpp (Acly, ggml-based, MIT) runs everything through a single Vulkan backend. That gives vendor-neutral GPU acceleration across NVIDIA/AMD/Intel with no per-vendor branching, the same approach Upscayl and chaiNNer use. ggml's CPU backend is the automatic fallback when no Vulkan device is available.
 
-ncnn was the original choice for the same vendor-neutral reasoning, but its conversion tooling (`pnnx`, `onnx2ncnn`) can't translate the transformer and deformable-conv ops BiRefNet-lite needs. vision.cpp implements both natively, so BiRefNet-lite runs without conversion workarounds. Full history of the ncnn attempt is in git log, not repeated here. ONNX Runtime was also considered and rejected: no mature Vulkan execution provider.
+ncnn was the original choice for the same vendor-neutral reasoning, but its conversion tooling (`pnnx`, `onnx2ncnn`) cannot translate the transformer and deformable-conv ops BiRefNet-lite needs. vision.cpp implements both natively. The full history of the ncnn attempt is in git log. ONNX Runtime was also considered and rejected because it has no mature Vulkan execution provider.
 
-**No image tiling for segmentation.** BiRefNet-lite's GGUF always downsamples input to 1024x1024 before inference, then upsamples the mask back, so VRAM cost is constant regardless of input size (vision.cpp instead auto-downscales against a 4GB single-tensor cap for very large images). Tiling wouldn't help quality either: segmentation needs whole-image context to identify the subject.
+**No image tiling for segmentation.** BiRefNet-lite's GGUF always downsamples input to 1024x1024 before inference and upsamples the mask back, so VRAM cost is constant regardless of input size. vision.cpp auto-downscales against a 4GB single-tensor cap for very large images. Tiling would not help quality either, since segmentation needs whole-image context to identify the subject.
 
-**Higher-resolution background removal, if ever needed**: `BiRefNet-dynamic` scales its internal resolution with input size instead of the fixed 1024x1024 above. Its large-image allocator bug ([krita-vision-tools#54](https://github.com/Acly/krita-vision-tools/issues/54)) was fixed upstream before this repo's vendored vision.cpp commit. See "Model management" below for the planned model-swap feature this unlocks.
+**Higher-resolution background removal, if ever needed.** `BiRefNet-dynamic` scales its internal resolution with input size instead of the fixed 1024x1024. Its large-image allocator bug ([krita-vision-tools#54](https://github.com/Acly/krita-vision-tools/issues/54)) was fixed upstream before this repo's vendored vision.cpp commit. Model management (below) unlocks swapping to it.
 
-**Depth-of-field / bokeh.** First cut: mask-only, blurring everything outside `BackgroundRemovalStep`'s mask with a feathered edge, no separate depth model. True depth-graduated blur is possible via vision.cpp's Depth-Anything V2, but only the Small checkpoint (Apache-2.0, 50.6MB) is license-clean (Base/Large are CC-BY-NC-4.0, same restriction that ruled out RMBG/MODNet), and it needs real implementation work: edge haloing, fine detail reading as a blob, and deriving the focus plane from Depth-Anything's relative (not metric) depth. Deferred until mask-only proves visibly insufficient.
+**Depth-of-field / bokeh.** The first cut is mask-only, blurring everything outside `BackgroundRemovalStep`'s mask with a feathered edge. No separate depth model. True depth-graduated blur is possible via vision.cpp's Depth-Anything V2, but only the Small checkpoint (Apache-2.0, 50.6MB) is license-clean. Base and Large are CC-BY-NC-4.0, the same restriction that ruled out RMBG and MODNet. It would also need real implementation work (edge haloing, fine detail reading as a blob, deriving a focus plane from relative depth). Deferred until mask-only proves visibly insufficient.
 
-**Bokeh strength control. Done.** A 0-100% slider in the Settings dialog, mapped to a blur radius scaled to the image's own shorter side (5% of it at 100%) rather than a fixed pixel count, so the effect looks consistent across resolutions. Adjusting it live-previews by reusing the mask `BokehStep` cached from the last real `process()` call and re-blending off the GUI thread via `QtConcurrent`; the blur itself is cheap CPU work, not model inference, so this stays fast without rerunning BiRefNet-lite per tick. `BokehStep::reblendCached(strengthPercent)` takes the in-flight slider value as an explicit argument rather than reading its own stored `strengthPercent_` back on the worker thread, so a fast drag can't race a GUI-thread write against a worker-thread read of the same member. Live preview only actually updates the screen when Bokeh is the last step in whatever's currently active (`MainWindow::isBokehTheActiveOutputStep()`) — otherwise the slider still updates and persists, it just doesn't have a valid single-step output to show until the next real run. Bokeh always uses whichever segmentation model Background Removal is set to, no independent model choice of its own; swapping that model invalidates the cache.
+**Bokeh strength control. Done.** A 0-100% slider in the Settings dialog maps to a blur radius scaled to the image's shorter side (5% at 100%), so the effect looks consistent across resolutions. Adjusting it live-previews by re-blending the mask `BokehStep` cached from the last real `process()` call, off the GUI thread via `QtConcurrent`. The blur is cheap CPU work, not model inference. Live preview only updates the screen when Bokeh is the last active step (`MainWindow::isBokehTheActiveOutputStep()`). The slider still updates and persists otherwise. Bokeh always uses whichever segmentation model Background Removal is set to, and swapping that model invalidates the cache.
 
-### Video/GIF scope: GIF only for now, no FFmpeg
+### Video/GIF scope (GIF only for now, no FFmpeg)
 
-Animated GIF and real video (mp4 etc.) are different asks. GIF uses Qt's own decoder plus a small new encoder dependency; video would need FFmpeg, a much bigger commitment (a new build dependency, LGPL/GPL licensing review, patent-encumbered codecs, a larger AppImage). Worth its own writeup when video is actually prioritized, not a rider on the GIF work.
+Animated GIF and real video are different asks. GIF uses Qt's decoder plus a small encoder dependency. Video would need FFmpeg, a much bigger commitment (new build dependency, LGPL/GPL licensing review, patent-encumbered codecs, larger AppImage). It gets its own writeup when actually prioritized.
 
-GIF encoding uses giflib (vcpkg, MIT) rather than FFmpeg or a vendored header: Qt's bundled GIF plugin turned out to be read-only (confirmed via `QImageWriter::supportedImageFormats()`), and giflib was already available the same way vulkan/vulkan-headers are pulled in (`vcpkg.json`). giflib only reads/writes the container, so `GifIO` (`src/core/GifIO.h`) also owns a small median-cut color quantizer for building the output palette.
+GIF encoding uses giflib (vcpkg, MIT). Qt's bundled GIF plugin turned out to be read-only (confirmed via `QImageWriter::supportedImageFormats()`). giflib only reads/writes the container, so `GifIO` (`src/core/GifIO.h`) also owns a small median-cut color quantizer for building the output palette.
 
-Inherent GIF limitations, not bugs: a 256-color-max palette (shared across all frames, rebuilt via median-cut) and on/off-only transparency (`BackgroundRemovalStep`'s soft mask edge gets thresholded at 128).
+Inherent GIF limitations (not bugs) are a 256-color-max palette shared across all frames (rebuilt via median-cut) and on/off-only transparency, where `BackgroundRemovalStep`'s soft mask edge gets thresholded at 128.
 
-### Background removal model: BiRefNet-lite
+### Background removal model (BiRefNet-lite)
 
 - MIT-licensed, strong quality for salient object segmentation/matting.
 - Other models considered:
@@ -52,55 +52,55 @@ Inherent GIF limitations, not bugs: a 256-color-max palette (shared across all f
   - IS-Net/U2Net: a viable fallback (Apache-2.0, smaller/faster) but visibly lower quality.
   - BEN2-base: MIT, a close alternative worth a look if BiRefNet-lite underperforms in practice.
 
-### Model management. Done: selection screen, on-demand downloads, AppData, live swap
+### Model management (done)
 
-Supersedes the old one-line "model swappability" deferred item. Both `SegmentationModel` (BiRefNet-lite / BiRefNet-dynamic / BiRefNet full) and `UpscaleModel` (foolhardy_Remacri / NMKD-Superscale-SP) become swappable, using license-clean checkpoints already published at the same huggingface.co/Acly account this project already downloads from at build time.
+Both `SegmentationModel` (BiRefNet-lite / BiRefNet-dynamic / BiRefNet full) and `UpscaleModel` (foolhardy_Remacri / NMKD-Superscale-SP) are swappable, using license-clean checkpoints published at the same huggingface.co/Acly account the build already downloads from.
 
-Adjustable upscale *amount* (as opposed to model choice) was considered and rejected: every compatible Real-ESRGAN checkpoint there is fixed at 4x (the only different-shaped file, `RealESRGAN-x4plus_anime-6B`, is a "plus" variant `esrgan_load_model` doesn't support), so there's nothing to expose without resampling the model's own output.
+Adjustable upscale *amount* (as opposed to model choice) was considered and rejected. Every compatible Real-ESRGAN checkpoint is fixed at 4x, and the only different-shaped file (`RealESRGAN-x4plus_anime-6B`) is a "plus" variant `esrgan_load_model` does not support.
 
 Design:
 
-- Curated registry, not free-form file browsing, for now. The selection screen knows a fixed list per category (name, filename, license, size, download URL, SHA256), scans the models directory, and marks each entry Installed/Not Installed by filename match. Browsing for an arbitrary `.gguf` is deferred, not dropped: vision.cpp's loaders are architecture-specific and would just fail on an incompatible file, and the curated list already covers what's worth offering.
-- On-demand download, not bundle-everything-at-build-time. Each entry gets its own download button, runs off the GUI thread, and is verified against its known SHA256 before being marked Installed (same discipline `models/CMakeLists.txt` already applies). A mismatch deletes the file and shows an error. Manually placing a file in the models directory works the same way, since Installed-detection is just filename matching.
-- Models directory moves to `QStandardPaths::AppDataLocation`, off the build tree. `TRANSPARENT_MODELS_DIR` is currently `${CMAKE_BINARY_DIR}/models`, wiped by a clean rebuild and not a stable place to point users at for manual placement. (`main.cpp` already has an unused `#include <QStandardPaths>`, likely an earlier, unfinished step toward this.)
-- First run still needs no network access. The two current defaults keep being fetched at CMake configure time as today; on first launch the app copies them into the AppData directory if missing, a local file copy, not a download.
-- Selecting a model applies live, no restart. `BackgroundRemovalStep`, `BokehStep`, and `UpscaleStep` currently take their model as an immutable `shared_ptr` fixed at construction, this needs a way to swap it post-construction. Loading a newly selected model runs asynchronously with a spinner, the same `QtConcurrent`/`QFutureWatcher` pattern `MainWindow` already uses for processing.
-- Lives in a Settings dialog, opened from a menu-bar action next to Help rather than a third item in the Simple/Advanced mode selector (`SettingsPage`, hosted in a `QDialog` `MainWindow` owns) — both model pickers and the bokeh-strength slider live there. Model choice and bokeh strength are set-occasionally-then-forget preferences, not per-run choices; nesting them inside Advanced mode would lock Simple-mode users out of picking BiRefNet-dynamic for a large photo, and a menu-bar action keeps the dialog reachable regardless of which mode is active without spending a mode-selector slot on it or sharing the main window's image-drop status label.
-- Persisted via `QSettings`. Nothing in the app persists any state today; every launch resets to hardcoded defaults.
+- Curated registry, not free-form file browsing. The selection screen knows a fixed list per category (name, filename, license, size, download URL, SHA256), scans the models directory, and marks each entry Installed or Not Installed by filename match. Browsing for an arbitrary `.gguf` is deferred, since vision.cpp's loaders are architecture-specific and would fail on an incompatible file anyway.
+- On-demand download, not bundled at build time. Each entry has its own download button, runs off the GUI thread, and is verified against its known SHA256 before being marked Installed. A mismatch deletes the file and shows an error. Manually placing a file in the models directory works the same way.
+- Models live in `QStandardPaths::AppDataLocation`, off the build tree. The build-tree path is wiped by clean rebuilds and is no place for manual placement.
+- First run still needs no network access. The two defaults are fetched at CMake configure time as before, and the app copies them into AppData on first launch if missing.
+- Selecting a model applies live, no restart. The steps take their model through a swappable `shared_ptr`, and loading a new model runs asynchronously with a spinner using the same `QtConcurrent`/`QFutureWatcher` pattern `MainWindow` already uses.
+- It lives in a Settings dialog opened from a menu-bar action next to Help, not in the Simple/Advanced mode selector. Model choice and bokeh strength are set-occasionally-then-forget preferences, and nesting them in Advanced mode would lock Simple-mode users out of picking BiRefNet-dynamic for a large photo.
+- Persisted via `QSettings`.
 
-### Language & UI: C++ + Qt Widgets
+### Language and UI (C++ and Qt Widgets)
 
-- C++ links directly against vision.cpp's native API: no FFI layer, smallest binary, fastest startup, no bundled runtime.
-- Qt Widgets, not QML/Qt Quick: simpler and lighter, sufficient for a deliberately minimal interface, and re-skins reasonably per-OS.
+- C++ links directly against vision.cpp's native API. No FFI layer, smallest binary, fastest startup.
+- Qt Widgets, not QML/Qt Quick. Simpler and lighter, sufficient for a deliberately minimal interface.
 
-### Internal architecture: pipeline-step abstraction from day one
+### Internal architecture (pipeline steps from day one)
 
-Even though the MVP only did one operation (background removal), it's built as a swappable pipeline step (image in, image out) rather than a hardcoded path. This is what made batch processing, upscaling, and GIF support additive later instead of a rewrite.
+The MVP is built as swappable pipeline steps (image in, image out) rather than a hardcoded path. That made batch processing, upscaling, and GIF support additive later instead of a rewrite.
 
-One level down, the same idea again: `SegmentationModel`. `BackgroundRemovalStep` never talks to ncnn or vision.cpp directly, only to a `SegmentationModel` interface (`isReady()` / `computeMask()`). `NcnnSegmentationModel` was the first adapter, `VisionCppSegmentationModel` replaced it, and the switch touched zero lines of `BackgroundRemovalStep`. `UpscaleModel` mirrors the same seam for Real-ESRGAN.
+`BackgroundRemovalStep` never talks to vision.cpp directly, only to a `SegmentationModel` interface (`isReady()` / `computeMask()`). `NcnnSegmentationModel` was the first adapter and `VisionCppSegmentationModel` replaced it without touching `BackgroundRemovalStep`. `UpscaleModel` mirrors the same seam for Real-ESRGAN.
 
-### Windows port: cross-compilation via MinGW-w64 from the existing Linux CI runner
+### Windows port (MinGW-w64 cross-compilation from the Linux CI runner)
 
-Researched and decided ahead of actually starting the Windows port (still gated behind Linux distro packages, see the deferred list below).
+Researched and decided ahead of starting the port. The work itself is still gated behind Linux distro packages (see deferred list).
 
-**Decision: cross-compile Windows binaries from the same Linux box that already hosts Forgejo and its Actions runner, using mingw-w64, rather than standing up a native Windows CI runner.** There's no second machine to dedicate as a Windows runner, and the alternative — Forgejo's official `act_runner` is Linux-only, with Windows support existing only as an unofficial, alpha-quality community build ("should not be considered secure enough to deploy in production") — is worse than cross-compiling from infrastructure that already exists and is already trusted. This was the opposite of the first conclusion this research reached; revisited once the actual hardware constraint (no spare Windows machine) was clear, and the individual cross-compile risks turned out to be smaller than first assessed (see below).
+**Decision. Cross-compile Windows binaries from the same Linux box that hosts Forgejo and its Actions runner, using mingw-w64, rather than standing up a native Windows CI runner.** There is no second machine for a native runner, and Forgejo's official `act_runner` is Linux-only. Its unofficial Windows build is alpha-quality and "should not be considered secure enough to deploy in production". Cross-compiling reuses infrastructure that already exists and is trusted.
 
 **Toolchain**:
 
-- **mingw-w64** (`gcc-mingw-w64-x86-64`/`g++-mingw-w64-x86-64`), targeting `x86_64-w64-mingw32`, for the app's own code and for cross-compiling vision.cpp/ggml.
-- **vcpkg's community `x64-mingw-dynamic` triplet**, chainloaded through a custom CMake toolchain file (`VCPKG_CHAINLOAD_TOOLCHAIN_FILE`), for the small vcpkg deps this repo already has: `giflib`, `vulkan`/`vulkan-headers`. Not covered by vcpkg's own CI, but these are small, portable C libraries with a long independent history of building under MinGW — low realistic risk despite the formal disclaimer.
-- **Qt6, via `aqtinstall` rather than building from source.** `aqtinstall` (`pip install aqtinstall`) fetches Qt's own official prebuilt Windows MinGW 64-bit binaries directly — the same archives the Qt Online Installer uses — regardless of what OS is doing the downloading. This sidesteps the single biggest from-source cross-compile risk entirely: no need to build all of Qt6 under an untested vcpkg triplet.
-- **Vulkan shader compilation (`glslc`) is not actually cross-compile-sensitive.** It compiles GLSL to target-agnostic SPIR-V bytecode as a build-time host step, and ggml's own CMake already has first-party support for this exact situation: `ExternalProject_Add` builds its `vulkan-shaders-gen` tool for the host specifically when `CMAKE_CROSSCOMPILING` is set. A native Linux Vulkan SDK/`glslc` install on the build image covers this.
+- **mingw-w64** (`gcc-mingw-w64-x86-64`/`g++-mingw-w64-x86-64`) targeting `x86_64-w64-mingw32`, for the app's code and for cross-compiling vision.cpp/ggml.
+- **vcpkg's community `x64-mingw-dynamic` triplet** (chainloaded via `VCPKG_CHAINLOAD_TOOLCHAIN_FILE`) for `giflib` and `vulkan`/`vulkan-headers`. Not covered by vcpkg's own CI, but these are small portable C libraries with a long history of building under MinGW.
+- **Qt6 via `aqtinstall`**, not from source. It fetches Qt's official prebuilt Windows MinGW 64-bit binaries on any host OS, which removes the single biggest from-source risk.
+- **`glslc` is not cross-compile-sensitive.** It compiles GLSL to target-agnostic SPIR-V as a host build step, and ggml's CMake already builds its `vulkan-shaders-gen` tool for the host when `CMAKE_CROSSCOMPILING` is set. A native Linux `glslc` install covers this.
 
-**Genuinely open unknowns, to resolve with a manual local spike before wiring up any CI**: whether vision.cpp's own `CMakeLists.txt` (not just bare ggml) cooperates with `CMAKE_CROSSCOMPILING` out of the box; whether vcpkg's mingw triplet builds `giflib`/the Vulkan loader without incident; and how to package the result, since `windeployqt.exe` is a Windows PE tool and won't run natively on the Linux build host (run it under Wine, or hardcode this app's small, fixed Qt DLL list — `Qt6Core`/`Gui`/`Widgets`/`Network`, `platforms/qwindows.dll`, plus the mingw runtime DLLs — as a CMake install step). None of these are exotic; expect a day or two of focused work with one or two fixable snags, not an open-ended research effort.
+**Open unknowns, to resolve with a manual local spike before any CI**: whether vision.cpp's own `CMakeLists.txt` cooperates with `CMAKE_CROSSCOMPILING`, whether vcpkg's mingw triplet builds `giflib` and the Vulkan loader, and how to package the result (`windeployqt.exe` is a Windows PE tool and will not run natively on the Linux build host. Run it under Wine, or hardcode the app's fixed Qt DLL list as a CMake install step). Expect a day or two of focused work, not open-ended research.
 
 **Steps, in order**:
 
-1. Do the cross-compile by hand on the homelab box first, outside any CI workflow, to actually resolve the unknowns above.
-2. Once that spike succeeds, capture the working toolchain in a Dockerfile (below) and build a purpose-built CI image, rather than reinstalling the toolchain from scratch on every job run.
-3. Push the image to Forgejo's own built-in container registry (no extra infra needed — it's already part of this project's Forgejo instance): `forgejo.yourdomain/you/ci-windows-cross:v1`.
-4. Add a `.forgejo/workflows/windows-cross-build.yaml` job with `runs-on: docker` and `container: image: forgejo.yourdomain/you/ci-windows-cross:v1`, wired up with the persistent caching below.
-5. Only then consider a Windows installer; PLAN.md's stated goal is a portable single `.exe` (windeployqt/manual-DLL-list output, zipped) to start, an installer (NSIS/WiX/Inno Setup) only if a real need shows up later.
+1. Do the cross-compile by hand on the homelab box first, outside CI, to resolve the unknowns above.
+2. Capture the working toolchain in a Dockerfile (below) and build a purpose-built CI image.
+3. Push the image to Forgejo's built-in container registry as `forgejo.yourdomain/you/ci-windows-cross:v1`.
+4. Add a `.forgejo/workflows/windows-cross-build.yaml` job with `runs-on: docker`, wired to the persistent caching below.
+5. Only then consider an installer. The stated goal is a portable single `.exe` (windeployqt or manual DLL list, zipped) to start.
 
 **Dockerfile for the CI image**:
 
@@ -118,20 +118,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 ```
 
-(`glslc` here is the Linux-native shader compiler, used as a host tool during the build, per the "not cross-compile-sensitive" point above — a native Vulkan SDK/loader isn't needed for the *cross-compiled* Windows binary itself, only for this build-time step.)
+(`glslc` here is the Linux-native shader compiler, used as a host tool during the build. A native Vulkan SDK/loader is not needed for the cross-compiled Windows binary itself.)
 
-**Persistent caching**, so CI doesn't recompile vision.cpp/ggml and vcpkg's deps from scratch on every run:
+**Persistent caching**, so CI does not recompile vision.cpp/ggml and vcpkg's deps from scratch every run:
 
-1. Create two named Docker volumes on the DinD daemon the runner talks to: `docker volume create ci-ccache` and `docker volume create ci-vcpkg-cache`. (Named volumes avoid the UID/permission mismatches raw bind-mounts commonly hit here; their persistence depends on the DinD container's own `/var/lib/docker` itself being durable, worth confirming.)
-2. Allow-list both in the runner's `config.yaml`:
+1. Create two named Docker volumes on the DinD daemon: `ci-ccache` and `ci-vcpkg-cache`. Named volumes avoid the UID/permission mismatches raw bind-mounts commonly hit. Their persistence depends on the DinD container's own `/var/lib/docker` being durable, worth confirming.
+2. Allow-list both in the runner's `config.yaml` and restart the runner:
    ```yaml
    container:
      valid_volumes:
        - ci-ccache
        - ci-vcpkg-cache
    ```
-   and restart the runner for it to take effect.
-3. Reference them in the workflow job, with `CMAKE_C/CXX_COMPILER_LAUNCHER=ccache` (works transparently with the mingw cross-compiler — ccache just wraps whatever compiler command CMake invokes) and vcpkg's `files` binary-cache backend:
+3. Reference them in the workflow job:
    ```yaml
    jobs:
      windows-cross-build:
@@ -157,34 +156,34 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
          - name: Build
            run: cmake --build build
    ```
-   `ccache` evicts on its own once `CCACHE_MAXSIZE` is hit; vcpkg's `files` cache backend doesn't auto-evict, but with only three small vcpkg deps that's not a practical concern yet.
+   `ccache` evicts on its own once `CCACHE_MAXSIZE` is hit. vcpkg's `files` backend does not auto-evict, but with only three small deps that is not a practical concern yet.
 
-## v1 (MVP) scope: Linux only
+## v1 (MVP) scope (Linux only)
 
 - Single image, drag-and-drop input.
-- Background removal via BiRefNet-lite running on vision.cpp/Vulkan (CPU fallback if no Vulkan).
-- Minimal UI: open image, see transparent result, export. No library, no history, no batch queue yet.
+- Background removal via BiRefNet-lite on vision.cpp/Vulkan, CPU fallback if no Vulkan.
+- Minimal UI: open image, see transparent result, export. No library, history, or batch queue.
 - Output: transparent PNG.
-- Packaging: AppImage, portable, no install/root required, avoids the sandboxing/GPU-passthrough overhead Flatpak would add. Distro-specific packages (deb/rpm) can follow later. **Done.** `packaging/build-appimage.sh` builds, `cmake --install`s into an AppDir, and runs linuxdeploy + linuxdeploy-plugin-qt against it, using the app icon and `.desktop` file in `resources/` and `packaging/`. Two quirks needed working around, both upstream packaging issues rather than anything in this app: linuxdeploy's bundled `strip` predates DT_RELR relative relocations (now default on current glibc/binutils toolchains) and aborts on any library built with one, worked around with `NO_STRIP=1`; and on distros where KDE's kimageformats package shares Qt's `plugins/imageformats` directory (e.g. Arch), several of its plugins have unresolvable dependencies on a stock install, worked around by excluding `kimg_*.so` from the Qt plugin deploy step since this app only needs Qt's own built-in image formats plus giflib for GIF. Verified end-to-end on this repo's own dev machine: produces a working AppImage that launches and detects Vulkan devices correctly.
+- Packaging: portable AppImage, no install or root required, avoiding Flatpak's sandboxing/GPU-passthrough overhead. **Done.** `packaging/build-appimage.sh` installs into an AppDir with `cmake --install` and runs linuxdeploy plus linuxdeploy-plugin-qt. Two upstream quirks needed workarounds: linuxdeploy's bundled `strip` predates DT_RELR relocations and aborts on libraries built with them (`NO_STRIP=1`), and on distros where KDE's kimageformats shares Qt's `plugins/imageformats` directory (e.g. Arch) several of its plugins have unresolvable dependencies, so `kimg_*.so` is excluded from the deploy step. Verified end to end on the dev machine.
 
 ## Deferred (post-Linux-MVP, roughly in order)
 
-1. ~~Batch / folder processing~~ **Done.** Drop a folder instead of a file: `BatchRunner` (`src/core/BatchRunner.h`) finds supported images inside it (non-recursive), runs the same `Pipeline` over each, and saves results as PNGs into a separately-chosen output folder. Progress and per-file failures surface in the status label.
-2. ~~Upscaling~~ **Done.** `UpscaleStep`/`VisionCppUpscaleModel` (`src/core/UpscaleStep.h`) mirror the `SegmentationModel` seam, running the `ESRGAN-4x-foolhardy_Remacri` checkpoint (BSD-3-Clause). Simple mode runs it or background removal one at a time; Advanced mode can combine both in either order, since `UpscaleStep` rebuilds the alpha channel after the RGB-only upscale. Adjustable upscale amount was considered and rejected, see "Model management" above.
-3. ~~Depth-of-field / bokeh~~ **Mask-only, with an adjustable strength slider. Done.** `BokehStep` (`src/core/BokehStep.h`) reuses `BackgroundRemovalStep`'s `SegmentationModel`, no separate depth model, and box-blurs everything outside the mask, with the mask's own soft edge feathering the transition; strength is a live-previewed 0-100% slider in the Settings dialog. See "Bokeh strength control" above. Full depth-graduated blur (Depth-Anything V2) is still a later refinement, not scoped yet.
-4. ~~Video / GIF support~~ **GIF done; video still deferred.** `GifIO` (`src/core/GifIO.h`) reads animated GIF frames via Qt's decoder, runs each through the same `Pipeline`, and re-encodes as a new GIF via giflib. `BatchRunner` and `MainWindow`'s frame-cycling preview both support this. True video needs FFmpeg or similar and is out of scope for now, see "Video/GIF scope" above.
-5. ~~Model swappability~~ **Done.** See "Model management" above for the full design: a Settings dialog, per-model downloads into AppData, and live swap.
+1. ~~Batch / folder processing~~ **Done.** Drop a folder instead of a file. `BatchRunner` (`src/core/BatchRunner.h`) finds supported images inside it (non-recursive), runs the same `Pipeline` over each, and saves PNGs to a chosen output folder. Progress and failures surface in the status label.
+2. ~~Upscaling~~ **Done.** `UpscaleStep`/`VisionCppUpscaleModel` mirror the `SegmentationModel` seam, running the `ESRGAN-4x-foolhardy_Remacri` checkpoint (BSD-3-Clause). `UpscaleStep` rebuilds the alpha channel after the RGB-only upscale, so Simple mode runs it or background removal one at a time and Advanced mode can combine both.
+3. ~~Depth-of-field / bokeh~~ **Mask-only with an adjustable strength slider. Done.** `BokehStep` (`src/core/BokehStep.h`) reuses `BackgroundRemovalStep`'s `SegmentationModel` and box-blurs everything outside the mask. Full depth-graduated blur (Depth-Anything V2) is a later refinement, not scoped yet.
+4. ~~Video / GIF support~~ **GIF done, video still deferred.** `GifIO` (`src/core/GifIO.h`) reads animated GIF frames via Qt's decoder, runs each through the same `Pipeline`, and re-encodes via giflib. True video needs FFmpeg or similar.
+5. ~~Model swappability~~ **Done.** See model management above.
 6. Linux distro-native packages (deb/rpm) alongside the AppImage.
-7. Windows port (portable single .exe to start; installer only if a real need shows up). Build/CI approach researched and decided: MinGW-w64 cross-compilation from the existing Linux Forgejo runner, see "Windows port: cross-compilation via MinGW-w64" above.
+7. Windows port (portable single .exe first, installer only if a real need shows up). Approach decided: MinGW-w64 cross-compilation from the Linux Forgejo runner.
 8. macOS port, contingent on tester access.
 
-**Contingent, not on the list above**: colorizing black-and-white photos. Candidate model is DDColor (Apache-2.0), tentative. No GGUF weights exist for any permissively-licensed colorization model, so this needs a from-scratch PyTorch-to-GGUF conversion, comparable to BiRefNet's, gated behind a feasibility spike before it gets a firm slot, after distro packages and before the Windows port if it clears that spike.
+**Contingent, not on the list above**: colorizing black-and-white photos. Candidate model is DDColor (Apache-2.0), tentative. No GGUF weights exist for any permissively-licensed colorization model, so this needs a from-scratch PyTorch-to-GGUF conversion and a feasibility spike before it gets a firm slot.
 
-## CI/CD: Forgejo Actions
+## CI/CD with Forgejo Actions
 
-This repo's remote (`forge.db-serve.com`) is a self-hosted Forgejo instance, not GitHub, so GitHub Actions doesn't apply. Forgejo Actions is GitHub-Actions-compatible (workflow YAML in `.forgejo/workflows/`), matching what this account's other repos (portfolio, resume-builder, pcb2blender) already run: `runs-on: homelab` against a self-hosted runner, `actions/checkout` + apt for dependencies, `secrets.TOKEN` for anything hitting the Forgejo API.
+The remote (`forge.db-serve.com`) is a self-hosted Forgejo instance, so GitHub Actions does not apply. Forgejo Actions is GitHub-Actions-compatible, with workflow YAML in `.forgejo/workflows/`, matching what this account's other repos already run: `runs-on: homelab` against a self-hosted runner, `actions/checkout` plus apt for dependencies, `secrets.TOKEN` for anything hitting the Forgejo API.
 
-- `.forgejo/workflows/ci.yml`: build + `ctest` on every push and PR. Installs Qt6/Ninja via apt, caches `ccache` and vcpkg's download cache across runs since a cold build compiles vision.cpp/ggml from source (Vulkan shader compilation included) and would otherwise redo that every run.
-- `.forgejo/workflows/release.yml`: on a published Forgejo release, runs `packaging/build-appimage.sh` and uploads the resulting AppImage (plus a SHA256SUMS file) as release assets via `actions/forgejo-release`, the same pattern resume-builder and pcb2blender use.
+- `.forgejo/workflows/ci.yml`: build + `ctest` on every push and PR. Installs Qt6/Ninja via apt and caches `ccache` and vcpkg's download cache across runs.
+- `.forgejo/workflows/release.yml`: on a published release, runs `packaging/build-appimage.sh` and uploads the AppImage plus a SHA256SUMS file as release assets via `actions/forgejo-release`.
 
-**`glslc` comes from LunarG's Vulkan SDK apt repo, not Ubuntu's own.** First actual CI run failed at link time with `undefined reference to repeat_f16_data`/`repeat_f16_len`: ggml's Vulkan shader generator silently dropped an fp16 shader variant instead of failing loudly, because the runner's `glslc` (Ubuntu noble's `universe` package, `2023.8-1build1`) is too old for whatever GLSL feature that variant needs. Both workflows now add `packages.lunarg.com`'s apt repo and install `vulkan-sdk` from there instead, the same fix llama.cpp's own official Vulkan Dockerfile uses for this exact backend. LunarG stopped updating their Ubuntu packages after May 2025 in favor of the Linux tarball, so this repo's `glslc` is itself not perpetually current, just far newer than the distro archive; if a future ggml shader needs something newer still, the tarball is the documented fallback.
+**`glslc` comes from LunarG's Vulkan SDK apt repo, not Ubuntu's own.** The first CI run failed at link time with `undefined reference to repeat_f16_data`/`repeat_f16_len` because ggml's Vulkan shader generator silently dropped an fp16 shader variant instead of failing loudly. The runner's `glslc` (Ubuntu noble's `universe` package, `2023.8-1build1`) was too old. Both workflows now add `packages.lunarg.com`'s apt repo and install `vulkan-sdk` from there, the same fix llama.cpp's official Vulkan Dockerfile uses. LunarG stopped updating their Ubuntu packages after May 2025 in favor of the Linux tarball, so if a future ggml shader needs something newer, the tarball is the fallback.

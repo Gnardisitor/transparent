@@ -45,10 +45,11 @@
 
 namespace {
 
-// Standard transparency checkerboard so the user can actually tell removed
-// background apart from an opaque white/gray fill.
-QPixmap checkerboardPattern(int cell = 12) {
-    QPixmap pattern(cell * 2, cell * 2);
+// Checkerboard behind the preview so removed background is visible. Drawn
+// at physical-pixel resolution with the DPR set so it stays crisp on HiDPI.
+QPixmap checkerboardPattern(qreal devicePixelRatio, int cell = 12) {
+    QPixmap pattern(cell * 2 * devicePixelRatio, cell * 2 * devicePixelRatio);
+    pattern.setDevicePixelRatio(devicePixelRatio);
     QPainter painter(&pattern);
     painter.fillRect(0, 0, cell * 2, cell * 2, QColor(210, 210, 210));
     painter.fillRect(0, 0, cell, cell, QColor(160, 160, 160));
@@ -63,15 +64,15 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     : QMainWindow(parent), pipeline_(std::move(pipeline)), modelManager_(std::move(modelManager)),
       batchRunner_(pipeline_) {
     setAcceptDrops(true);
-    setWindowTitle(QStringLiteral("transparent"));
+    setWindowTitle(QStringLiteral("Transparent"));
 
     QMenu* helpMenu = menuBar()->addMenu(QStringLiteral("Help"));
     QAction* aboutAction = helpMenu->addAction(QStringLiteral("About"));
     connect(aboutAction, &QAction::triggered, this, [this]() {
         QMessageBox::about(
-            this, QStringLiteral("About transparent"),
+            this, QStringLiteral("About Transparent"),
             QStringLiteral(
-                "<h3>transparent</h3>"
+                "<h3>Transparent</h3>"
                 "<p>Local, GPU-accelerated background removal, image upscaling, and bokeh "
                 "for Linux, with animated-GIF support (every frame runs through the same "
                 "pipeline). No cloud calls, no subscriptions, no telemetry.</p>"
@@ -81,12 +82,9 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
                 "Real-ESRGAN, giflib) keep their own licenses.</p>"));
     });
 
-    // A top-level menu-bar action (next to Help), not a Simple/Advanced mode
-    // — model choice is a "set occasionally, then forget" preference, not a
-    // per-run one, so it shouldn't require leaving whatever mode you're
-    // already working in, or share the main window's image-drop status
-    // label. Opens settingsDialog_, built further down once settingsPage_
-    // exists.
+    // A menu-bar action rather than a third mode: model choice is a
+    // set-occasionally preference, not a per-run one. Opens settingsDialog_,
+    // built below once settingsPage_ exists.
     QAction* settingsAction = menuBar()->addAction(QStringLiteral("Settings"));
     connect(settingsAction, &QAction::triggered, this, [this]() {
         settingsDialog_->show();
@@ -150,21 +148,14 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     }
     layout->addWidget(statusLabel_);
 
-    // Shown/hidden directly rather than via QStackedWidget: Simple mode has
-    // no page body of its own (its only control is the dropdown above), and
-    // a QStackedWidget always reserves space for its *largest* page even
-    // while showing a smaller one — which left a big empty gap under the
-    // top row in Simple mode, since it was sized to fit Advanced's list.
+    // Shown/hidden directly, not via QStackedWidget, which reserves space
+    // for its largest page and would leave an empty gap in Simple mode.
     advancedPage_ = buildAdvancedPage();
     advancedPage_->setVisible(false);
     layout->addWidget(advancedPage_);
 
-    // A separate top-level dialog rather than a page inside `central`: it
-    // has nothing to do with the current image (no drop-hint status label,
-    // no preview), so it shouldn't share the main window's layout. Not
-    // WA_DeleteOnClose — closing it (the X button, or Escape) just hides
-    // it, same as any settings panel you'd reopen later without losing its
-    // scroll position or in-flight download rows.
+    // Separate top-level dialog: unrelated to the current image. Not
+    // WA_DeleteOnClose, so hiding it keeps scroll position and downloads.
     settingsPage_ = new SettingsPage(modelManager_.get());
     connect(settingsPage_, &SettingsPage::modelSelected, this, &MainWindow::onModelSelected);
     connect(settingsPage_, &SettingsPage::bokehStrengthChanged, this,
@@ -175,11 +166,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     settingsDialogLayout->addWidget(settingsPage_);
 
     if (modelManager_) {
-        // Reflects whatever main.cpp actually loaded (QSettings if
-        // something was persisted, the catalog default otherwise) so the
-        // dialog doesn't open with no radio selected. Guarded on
-        // modelManager_ so tests constructing MainWindow without one (e.g.
-        // test_main_window.cpp) don't touch real QSettings/user config.
+        // Guarded on modelManager_ so tests without one don't touch user config.
         QSettings settings;
         settingsPage_->setActiveModel(
             ModelCategory::Segmentation,
@@ -202,9 +189,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     previewLabel_->setMinimumSize(400, 300);
     previewLabel_->setFrameShape(QFrame::StyledPanel);
 
-    // Floating "remove image" badge and busy spinner over the preview,
-    // repositioned on every resize/preview update since previewLabel_'s
-    // size isn't known until first shown.
+    // Overlays float over the preview; repositioned on resize.
     clearButton_ = new QPushButton(QStringLiteral("✕"), previewLabel_);
     clearButton_->setFixedSize(24, 24);
     clearButton_->setToolTip(QStringLiteral("Remove image"));
@@ -214,7 +199,8 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     spinner_ = new SpinnerWidget(previewLabel_);
     spinner_->setVisible(false);
 
-    exportButton_ = new QPushButton(QStringLiteral("Export PNG..."), this);
+    // Text matches what a run would save (GIF for animated sources).
+    exportButton_ = new QPushButton(QStringLiteral("Export PNG"), this);
     exportButton_->setEnabled(false);
     connect(exportButton_, &QPushButton::clicked, this, &MainWindow::onExportClicked);
 
@@ -223,10 +209,8 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
 
     setCentralWidget(central);
 
-    // Pipeline steps (background removal, upscaling, ...) run real GPU/CPU
-    // inference that can take seconds; running that on the GUI thread froze
-    // the whole window (no repainting) for the duration. QtConcurrent::run
-    // moves the work off-thread; this watcher picks up the result.
+    // Inference runs off the GUI thread (it can take seconds); watchers
+    // pick up the results.
     connect(&processingWatcher_, &QFutureWatcher<QImage>::finished, this,
             &MainWindow::onProcessingFinished);
     connect(&gifProcessingWatcher_, &QFutureWatcher<std::vector<GifIO::Frame>>::finished, this,
@@ -238,9 +222,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     connect(&bokehPreviewWatcher_, &QFutureWatcher<QImage>::finished, this,
             &MainWindow::onBokehPreviewReady);
 
-    // Single-shot and re-armed with the new current frame's own delay each
-    // time it fires (advanceGifPreviewFrame), since GIF frames don't share
-    // one fixed interval the way a repeating QTimer assumes.
+    // Single-shot, re-armed per frame: GIF frames have individual delays.
     gifPreviewTimer_ = new QTimer(this);
     gifPreviewTimer_->setSingleShot(true);
     connect(gifPreviewTimer_, &QTimer::timeout, this, &MainWindow::advanceGifPreviewFrame);
@@ -251,14 +233,11 @@ QWidget* MainWindow::buildAdvancedPage() {
     auto* pageLayout = new QVBoxLayout(page);
     pageLayout->setContentsMargins(0, 0, 0, 0);
 
-    // Checkable, reorderable list of the same steps: InternalMove gives
-    // drag-to-reorder for free, no custom drag/drop code needed. Checking or
-    // reordering rows doesn't reprocess by itself — only the button below
-    // does, since Advanced mode's whole point is an explicit trigger.
+    // InternalMove gives drag-to-reorder for free. Reordering doesn't
+    // reprocess; only the button below does.
     advancedStepList_ = new QListWidget(page);
     advancedStepList_->setDragDropMode(QAbstractItemView::InternalMove);
-    // Reordering rows (drag/drop) doesn't fire itemChanged — only a row's
-    // own data changing does — so this only reacts to checkbox toggles.
+    // itemChanged fires on checkbox toggles, not on drag reordering.
     connect(advancedStepList_, &QListWidget::itemChanged, this, [this](QListWidgetItem* item) {
         if (!pipeline_) {
             return;
@@ -282,18 +261,9 @@ void MainWindow::populateAdvancedStepList() {
     if (!pipeline_) {
         return;
     }
-    // Populating fires itemChanged reentrantly — QListWidgetItem's own
-    // construction/setData/setFlags calls below each emit it at least once,
-    // every time reporting the item's not-yet-set default Qt::Unchecked
-    // state, before setCheckState() ever runs. Left unblocked, the
-    // itemChanged handler (below) writes that transient Unchecked back into
-    // pipeline_ — silently disabling a step this function meant to leave
-    // enabled (e.g. Background Removal, Simple mode's default), since by
-    // the time setCheckState() itself runs, isStepEnabled() already reads
-    // back the corrupted false and "confirms" Unchecked instead of
-    // overwriting it, so nothing ever restores the correct state. This is a
-    // one-way sync (Pipeline state -> checkbox display), so the handler has
-    // no business firing during it at all.
+    // Populating fires itemChanged reentrantly with a transient Unchecked
+    // state; left unblocked that would write corrupted enabled flags back
+    // into pipeline_. One-way sync, so block the handler entirely.
     const QSignalBlocker blocker(advancedStepList_);
     for (size_t i = 0; i < pipeline_->stepCount(); ++i) {
         auto* item = new QListWidgetItem(pipeline_->stepName(i), advancedStepList_);
@@ -336,10 +306,7 @@ bool MainWindow::isBokehTheActiveOutputStep() const {
     if (isAdvancedMode()) {
         order = currentAdvancedStepOrder();
     } else {
-        // Simple mode's operationCombo_ handler enables exactly one step;
-        // reprocess() then runs the plain Pipeline::run(input) overload,
-        // which just skips every disabled one — so "active" here means
-        // whichever single step is currently enabled.
+        // In Simple mode the enabled step is the active one.
         for (size_t i = 0; i < pipeline_->stepCount(); ++i) {
             if (pipeline_->isStepEnabled(i)) {
                 order.push_back(i);
@@ -370,17 +337,11 @@ void MainWindow::onModeChanged(int index) {
     operationCombo_->setVisible(index == 0);
 
     if (index == 1) {
-        // Re-derive from Pipeline every time Advanced is shown, so a
-        // selection change made in Simple mode is reflected. Any reordering
-        // from an earlier Advanced session is intentionally not preserved —
-        // Pipeline's declaration order is always the starting point.
+        // Re-derive from Pipeline so Simple-mode selection changes show up.
         populateAdvancedStepList();
     } else if (pipeline_) {
-        // Advanced mode may leave zero, one, or several steps enabled at
-        // once; Simple mode allows exactly one, so collapse to whichever
-        // was enabled first (or the dropdown's current selection if none
-        // were), and write that collapsed state back to Pipeline so both
-        // views stay consistent.
+        // Advanced can leave several steps enabled; Simple mode collapses
+        // to the first enabled one (or the dropdown's current selection).
         int selected = -1;
         for (int i = 0; i < operationCombo_->count(); ++i) {
             if (pipeline_->isStepEnabled(static_cast<size_t>(i)) && selected < 0) {
@@ -420,10 +381,7 @@ void MainWindow::setControlsEnabled(bool enabled) {
     operationCombo_->setEnabled(enabled);
     advancedStepList_->setEnabled(enabled);
     startProcessingButton_->setEnabled(enabled);
-    // Covers both directions: processing an image disables model swapping,
-    // and (via onModelSelected/onSegmentationModelLoaded/
-    // onUpscaleModelLoaded below, which also route through here) swapping a
-    // model disables processing — so the two can never race each other.
+    // Processing and model swapping disable each other so they can't race.
     settingsPage_->setBusy(!enabled);
     if (!enabled) {
         exportButton_->setEnabled(false);
@@ -492,12 +450,14 @@ void MainWindow::loadImage(const QString& path) {
     }
     resultGifFrames_.clear();
 
+    exportButton_->setText(isAnimatedGifSource_ ? QStringLiteral("Export GIF")
+                                                  : QStringLiteral("Export PNG"));
+
     clearButton_->setVisible(true);
     repositionOverlays();
 
     if (isAdvancedMode()) {
-        // Advanced mode's whole point is an explicit trigger: show the
-        // just-loaded (unprocessed) image and wait for Start Processing.
+        // Wait for an explicit Start Processing; show the raw image.
         resultImage_ = sourceImage_;
         updatePreview();
         exportButton_->setEnabled(!resultImage_.isNull());
@@ -509,10 +469,8 @@ void MainWindow::loadImage(const QString& path) {
 
 void MainWindow::reprocess() {
     const bool hasSource = isAnimatedGifSource_ ? !sourceGifFrames_.empty() : !sourceImage_.isNull();
-    // modelLoading_ too: pipeline steps' setModel() runs on the GUI thread
-    // once a swap lands, and this dispatches Pipeline::run() onto a
-    // background thread that reads those same steps' model pointers — the
-    // two must never overlap.
+    // modelLoading_ too: a swap writes the steps' model pointers on the GUI
+    // thread while this reads them on a worker thread.
     if (!hasSource || processing_ || modelLoading_ || bokehPreviewInFlight_) {
         return;
     }
@@ -632,9 +590,7 @@ void MainWindow::onModelSelected(ModelCategory category, QString filename) {
 void MainWindow::onSegmentationModelLoaded() {
     const std::shared_ptr<SegmentationModel> model = segmentationModelWatcher_.result();
     if (model && model->isReady()) {
-        // Bokeh always mirrors Background Removal's segmentation model —
-        // the mask it needs is exactly the one Background Removal already
-        // computes, so both steps get the same new model together.
+        // Bokeh shares Background Removal's model; update both together.
         if (auto step = backgroundRemovalStep()) {
             step->setModel(model);
         }
@@ -648,10 +604,8 @@ void MainWindow::onSegmentationModelLoaded() {
         statusLabel_->clear();
     } else {
         statusLabel_->setText(QStringLiteral("Could not load that model"));
-        // The radio button already flipped to the failed selection (Qt
-        // checks it on click, before modelSelected ever reaches here) — put
-        // it back on whatever's still actually running, which is exactly
-        // what QSettings still says since a failed load never writes to it.
+        // Qt checks the radio on click before modelSelected arrives; put it
+        // back on what QSettings still says.
         QSettings settings;
         settingsPage_->setActiveModel(
             ModelCategory::Segmentation,
@@ -698,19 +652,14 @@ void MainWindow::onBokehStrengthChanged(int percent) {
     if (!bokeh) {
         return;
     }
-    // Takes effect on the step's next real process() call regardless of
-    // whether the live-preview branch below fires this time.
+    // Takes effect at the next real process() call.
     bokeh->setStrengthPercent(percent);
 
     if (processing_ || modelLoading_ || bokehPreviewInFlight_ || !bokeh->hasCachedMask() ||
         !isBokehTheActiveOutputStep()) {
         return;
     }
-    // `percent` is passed explicitly (not read back via bokeh->
-    // strengthPercent() on the worker thread) so this can't race a
-    // concurrent write to that member — not that one's possible anyway
-    // once bokehPreviewInFlight_ is set below, but reblendCached() is
-    // documented to take it this way regardless (see its own comment).
+    // Pass the in-flight value explicitly; this runs on a worker thread.
     bokehPreviewInFlight_ = true;
     bokehPreviewWatcher_.setFuture(
         QtConcurrent::run([bokeh, percent]() -> QImage { return bokeh->reblendCached(percent); }));
@@ -737,6 +686,7 @@ void MainWindow::onClearImageClicked() {
     resultImage_ = QImage();
     previewLabel_->setPixmap(QPixmap());
     clearButton_->setVisible(false);
+    exportButton_->setText(QStringLiteral("Export PNG"));
     exportButton_->setEnabled(false);
     statusLabel_->setText(QStringLiteral("Drop an image or a folder of images here"));
 }
@@ -803,15 +753,24 @@ void MainWindow::updatePreview() {
         return;
     }
 
-    QPixmap canvas(previewLabel_->size());
+    // Canvas at physical resolution with the DPR set, for crisp HiDPI.
+    const qreal dpr = devicePixelRatioF();
+    const QSize viewSize = previewLabel_->size();
+    QPixmap canvas(viewSize * dpr);
+    canvas.setDevicePixelRatio(dpr);
     QPainter painter(&canvas);
-    painter.drawTiledPixmap(canvas.rect(), checkerboardPattern());
+    painter.drawTiledPixmap(canvas.rect(), checkerboardPattern(dpr));
 
-    const QImage scaled =
-        resultImage_.scaled(previewLabel_->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    const QPoint offset((canvas.width() - scaled.width()) / 2,
-                         (canvas.height() - scaled.height()) / 2);
-    painter.drawImage(offset, scaled);
+    // Only shrink to fit; smaller images render at 1:1.
+    QSize displaySize = resultImage_.size();
+    if (displaySize.width() > viewSize.width() || displaySize.height() > viewSize.height()) {
+        displaySize.scale(viewSize, Qt::KeepAspectRatio);
+    }
+    const QPoint offset((viewSize.width() - displaySize.width()) / 2,
+                         (viewSize.height() - displaySize.height()) / 2);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform,
+                          displaySize != resultImage_.size());
+    painter.drawImage(QRect(offset, displaySize), resultImage_);
     painter.end();
 
     previewLabel_->setPixmap(canvas);

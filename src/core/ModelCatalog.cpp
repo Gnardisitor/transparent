@@ -4,15 +4,10 @@
 
 namespace {
 
-// Sizes and checksums confirmed against huggingface.co/Acly/BiRefNet-GGUF
-// and huggingface.co/Acly/Real-ESRGAN-GGUF (their git-lfs blob metadata, not
-// downloaded and re-hashed locally). The two defaults' checksums also match
-// models/CMakeLists.txt's EXPECTED_HASH values byte for byte.
-//
-// RealESRGAN-x4plus_anime-6B is deliberately absent: it's a "plus"/
-// pixel-shuffle variant that vision.cpp's esrgan_load_model doesn't support
-// (see UpscaleStep's Deferred entry in PLAN.md), so it's not a real option
-// even though it's published in the same repo.
+// Sizes and checksums from the huggingface repos' git-lfs metadata; the two
+// defaults' checksums match models/CMakeLists.txt's EXPECTED_HASH values.
+// RealESRGAN-x4plus_anime-6B is deliberately absent: vision.cpp's
+// esrgan_load_model doesn't support that "plus" variant.
 const std::vector<ModelInfo>& catalog() {
     static const std::vector<ModelInfo> models = {
         {ModelCategory::Segmentation, QStringLiteral("BiRefNet-lite"),

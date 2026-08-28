@@ -5,9 +5,8 @@
 
 #include <memory>
 
-// Model-agnostic: turns whatever mask a SegmentationModel produces into an
-// alpha-composited image. Every ncnn/vision.cpp/etc.-specific detail (input
-// size, normalization, blob names, resizing) lives behind that seam, not here.
+// Model-agnostic: composites a SegmentationModel's mask into an
+// alpha image. Runtime-specific detail lives behind that seam.
 class BackgroundRemovalStep : public PipelineStep {
 public:
     explicit BackgroundRemovalStep(std::shared_ptr<SegmentationModel> model);
@@ -15,14 +14,10 @@ public:
     QImage process(const QImage& input) const override;
     QString name() const override { return QStringLiteral("Background Removal"); }
 
-    // False if the underlying model failed to load. The caller decides what
-    // to do about it (e.g. not adding this step to the pipeline at all).
+    // False if the underlying model failed to load.
     bool isReady() const { return model_ && model_->isReady(); }
 
-    // Swaps in a newly loaded model (e.g. the user picked a different one in
-    // Settings). The caller is responsible for loading it off the GUI
-    // thread first — construction (disk read, backend init, GPU pipeline
-    // setup) can take real time.
+    // The caller loads the new model off the GUI thread first.
     void setModel(std::shared_ptr<SegmentationModel> model) { model_ = std::move(model); }
 
 private:

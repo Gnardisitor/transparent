@@ -29,11 +29,9 @@ QImage BackgroundRemovalStep::process(const QImage& input) const {
     for (int y = 0; y < height; ++y) {
         const uchar* srcRow = rgbInput.constScanLine(y);
         const uchar* maskRow = alphaMask.constScanLine(y);
-        // Format_RGBA8888 is a byte-order format (R,G,B,A in memory,
-        // regardless of endianness) — write raw bytes directly rather than
-        // going through qRgba(), which packs Format_ARGB32's bit layout
-        // (0xAARRGGBB) and would swap red/blue once reinterpreted as bytes
-        // on a little-endian machine.
+        // Format_RGBA8888 is byte-order R,G,B,A in memory; write raw bytes
+        // directly. qRgba() would produce ARGB32 packing and swap red/blue
+        // on little-endian machines.
         uchar* dstRow = output.scanLine(y);
         for (int x = 0; x < width; ++x) {
             dstRow[x * 4 + 0] = srcRow[x * 3 + 0]; // R
