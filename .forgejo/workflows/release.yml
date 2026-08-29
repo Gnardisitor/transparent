@@ -28,7 +28,7 @@ jobs:
             build-essential cmake ninja-build qt6-base-dev qt6-base-dev-tools \
             libvulkan-dev vulkan-validationlayers glslang-tools glslc \
             breeze plasma-integration qt6-wayland \
-            pkg-config curl zip unzip tar ccache file
+            pkg-config curl zip unzip tar ccache file zsync
 
       - name: Cache ccache
         uses: actions/cache@v4
@@ -64,14 +64,27 @@ jobs:
 
       - name: Build AppImage
         run: packaging/build-appimage.sh
+        env:
+          # Embedded so AppImageUpdate / Gear Lever can check for updates.
+          # Forgejo resolves /releases/download/latest/ to the newest release.
+          APPIMAGE_UPDATE_INFO: >-
+            zsync|${{ github.server_url }}/${{ github.repository }}/releases/download/latest/Transparent-x86_64.AppImage.zsync
 
       - name: Prepare release assets
         run: |
           mkdir -p dist
-          cp build/transparent-x86_64.AppImage \
-            "dist/transparent-${{ github.event.release.tag_name }}-x86_64.AppImage"
+          # Versioned AppImage is the human-facing download
+          cp build/Transparent-*.AppImage \
+            "dist/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage"
+          # The zsync keeps a stable name so the URL embedded in the AppImage
+          # stays valid across releases; its target URL is rewritten to point
+          # at this release's versioned AppImage each time (same scheme as Eden)
+          zsyncmake -u "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage" \
+            "dist/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage"
+          mv "dist/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage.zsync" \
+            dist/Transparent-x86_64.AppImage.zsync
           cd dist
-          sha256sum *.AppImage > SHA256SUMS
+          sha256sum * > SHA256SUMS
 
       - name: Upload Release Assets
         uses: actions/forgejo-release@v2.13.4

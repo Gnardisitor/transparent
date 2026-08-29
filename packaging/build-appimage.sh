@@ -6,6 +6,22 @@ build_dir="${1:-${repo_root}/build}"
 tools_dir="${repo_root}/packaging/tools"
 appdir="${build_dir}/AppDir"
 
+# AppImage display/file name (leading 'v' stripped so the version reads e.g. 1.2.3)
+version="${APPIMAGE_VERSION:-$(git -C "${repo_root}" describe --tags --always 2>/dev/null || true)}"
+version="${version#v}"
+export LINUXDEPLOY_OUTPUT_APP_NAME="Transparent"
+export APPIMAGETOOL_APP_NAME="Transparent"
+if [[ -n "${version}" ]]; then
+  export LINUXDEPLOY_OUTPUT_VERSION="${version}"
+  export VERSION="${version}"
+fi
+# Optional embedded update info, e.g.
+#   zsync|https://host/owner/repo/releases/download/latest/Transparent-x86_64.AppImage.zsync
+# (read by AppImageUpdate / Gear Lever's "check for updates")
+if [[ -n "${APPIMAGE_UPDATE_INFO:-}" ]]; then
+  export LDAI_UPDATE_INFORMATION="${APPIMAGE_UPDATE_INFO}"
+fi
+
 mkdir -p "${tools_dir}"
 
 linuxdeploy="${tools_dir}/linuxdeploy-x86_64.AppImage"
@@ -110,4 +126,4 @@ fi
   --appdir "${appdir}" \
   --output appimage
 
-echo "AppImage written to ${build_dir}/"
+ls -t "${build_dir}"/Transparent*.AppImage | head -n1 | xargs -r echo "AppImage written to:"
