@@ -79,7 +79,10 @@ jobs:
           # The zsync keeps a stable name so the URL embedded in the AppImage
           # stays valid across releases; its target URL is rewritten to point
           # at this release's versioned AppImage each time (same scheme as Eden)
+          # -o is required: without it zsyncmake writes <basename>.zsync into
+          # the current directory, not next to the input file
           zsyncmake -u "${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.event.release.tag_name }}/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage" \
+            -o "dist/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage.zsync" \
             "dist/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage"
           mv "dist/Transparent-${{ github.event.release.tag_name }}-x86_64.AppImage.zsync" \
             dist/Transparent-x86_64.AppImage.zsync
