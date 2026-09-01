@@ -129,12 +129,12 @@ QImage BokehStep::blend(const QImage& input, const QImage& mask, int radius) con
     return output;
 }
 
-QImage BokehStep::process(const QImage& input) const {
+QImage BokehStep::process(const QImage& input, PipelineRun& run) const {
     if (!isReady() || input.isNull()) {
         return input;
     }
 
-    const QImage mask = model_->computeMask(input);
+    const QImage mask = run.maskFor(input, *model_);
     if (mask.isNull() || mask.size() != input.size()) {
         if (!mask.isNull()) {
             qWarning() << "BokehStep: mask size" << mask.size() << "doesn't match input size"

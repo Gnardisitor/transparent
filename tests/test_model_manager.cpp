@@ -10,7 +10,7 @@
 #include <QTemporaryDir>
 
 // Only the synchronous, network-free surface (paths, install detection,
-// checksum verification, default provisioning) is covered here —
+// checksum verification, default provisioning) is covered here;
 // downloadModel() drives a real QNetworkAccessManager request and is
 // exercised manually/in the running app instead, not against the network in
 // CI.
@@ -32,7 +32,7 @@ private slots:
 void TestModelManager::initTestCase() {
     // Redirects QStandardPaths::AppDataLocation (and friends) into a
     // temporary, per-process test location instead of a developer's real
-    // config/data directory — ModelManager must never touch actual
+    // config/data directory; ModelManager must never touch actual
     // installed models while under test.
     QStandardPaths::setTestModeEnabled(true);
 }
@@ -138,7 +138,7 @@ void TestModelManager::ensureDefaultsProvisionedSkipsAlreadyInstalled() {
 
 void TestModelManager::ensureDefaultsProvisionedIsNoOpWithEmptyBuildDir() {
     // Empty buildDefaultsDir_ is the constructor's documented "no-op" case
-    // (e.g. what tests pass) — it must not crash or fabricate paths.
+    // (e.g. what tests pass); it must not crash or fabricate paths.
     ModelManager manager{QString()};
     manager.ensureDefaultsProvisioned();
     QVERIFY(!manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Segmentation)));

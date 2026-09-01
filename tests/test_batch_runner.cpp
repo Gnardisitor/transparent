@@ -13,7 +13,7 @@ namespace {
 // real segmentation model, same approach test_pipeline.cpp uses.
 class InvertStep : public PipelineStep {
 public:
-    QImage process(const QImage& input) const override {
+    QImage process(const QImage& input, PipelineRun&) const override {
         QImage out = input.convertToFormat(QImage::Format_ARGB32);
         out.invertPixels();
         return out;
@@ -33,7 +33,7 @@ class TagStep : public PipelineStep {
 public:
     explicit TagStep(QString tag) : tag_(std::move(tag)) {}
 
-    QImage process(const QImage& input) const override {
+    QImage process(const QImage& input, PipelineRun&) const override {
         QImage out = input;
         out.setText(QStringLiteral("tag"), out.text(QStringLiteral("tag")) + tag_);
         return out;
@@ -220,9 +220,22 @@ void TestBatchRunner::runWritesAnimatedGifPerFrameInsteadOfPng() {
     QTemporaryDir outputDir;
     QVERIFY(inputDir.isValid() && outputDir.isValid());
 
-    std::vector<GifIO::Frame> sourceFrames{{makeTestImage(Qt::red), 10},
-                                            {makeTestImage(Qt::green), 10}};
-    QVERIFY(GifIO::writeFrames(inputDir.filePath("anim.gif"), sourceFrames));
+    // The streamed GIF's shared palette is fixed by its first processed
+    // frame (see GifIO::Writer), so the fixture's first frame must contain
+    // every hue later frames need for an exact round-trip: red/green split
+    // first, mirrored split second.
+    QImage halfRed = makeTestImage(Qt::red);
+    QImage halfGreen = makeTestImage(Qt::green);
+    QImage leftRed = halfRed.copy();
+    QImage leftGreen = halfGreen.copy();
+    for (int y = 0; y < 4; ++y) {
+        for (int x = 2; x < 4; ++x) {
+            leftRed.setPixelColor(x, y, Qt::green);
+            leftGreen.setPixelColor(x, y, Qt::red);
+        }
+    }
+    QVERIFY(GifIO::writeFrames(inputDir.filePath("anim.gif"),
+                                {{leftRed, 10}, {leftGreen, 10}}));
 
     auto pipeline = std::make_shared<Pipeline>();
     pipeline->addStep(std::make_shared<InvertStep>());
@@ -235,11 +248,13 @@ void TestBatchRunner::runWritesAnimatedGifPerFrameInsteadOfPng() {
     QVERIFY(QFile::exists(outputDir.filePath("anim.gif")));
     QVERIFY(!QFile::exists(outputDir.filePath("anim.png")));
 
+    // InvertStep inverts RGB (not alpha): red -> cyan, green -> magenta.
     const std::vector<GifIO::Frame> output = GifIO::readFrames(outputDir.filePath("anim.gif"));
     QCOMPARE(output.size(), 2u);
-    // InvertStep inverts RGB (not alpha), so red -> cyan and green -> magenta.
     QCOMPARE(output[0].image.pixelColor(0, 0), QColor(Qt::cyan));
+    QCOMPARE(output[0].image.pixelColor(3, 0), QColor(Qt::magenta));
     QCOMPARE(output[1].image.pixelColor(0, 0), QColor(Qt::magenta));
+    QCOMPARE(output[1].image.pixelColor(3, 0), QColor(Qt::cyan));
 }
 
 void TestBatchRunner::runTreatsSingleFrameGifAsPlainImage() {
@@ -249,7 +264,7 @@ void TestBatchRunner::runTreatsSingleFrameGifAsPlainImage() {
 
     // Qt's bundled GIF plugin is read-only (no encoder), so a single-frame
     // GIF fixture has to be built via GifIO too, same as the app itself
-    // would produce one — QImage::save(..., "GIF") silently fails.
+    // would produce one; QImage::save(..., "GIF") silently fails.
     QVERIFY(GifIO::writeFrames(inputDir.filePath("photo.gif"), {{makeTestImage(Qt::red), 10}}));
 
     BatchRunner runner(std::make_shared<Pipeline>());

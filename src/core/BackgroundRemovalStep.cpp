@@ -5,12 +5,12 @@
 BackgroundRemovalStep::BackgroundRemovalStep(std::shared_ptr<SegmentationModel> model)
     : model_(std::move(model)) {}
 
-QImage BackgroundRemovalStep::process(const QImage& input) const {
+QImage BackgroundRemovalStep::process(const QImage& input, PipelineRun& run) const {
     if (!isReady() || input.isNull()) {
         return input;
     }
 
-    const QImage mask = model_->computeMask(input);
+    const QImage mask = run.maskFor(input, *model_);
     if (mask.isNull() || mask.size() != input.size()) {
         if (!mask.isNull()) {
             qWarning() << "BackgroundRemovalStep: mask size" << mask.size()

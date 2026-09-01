@@ -126,7 +126,7 @@ void TestBokehStep::fullyBackgroundMaskBlursDetailAway() {
 
     // Strength maps to a radius relative to the image's shorter side (see
     // BokehStep::radiusForImage), so this needs a large-enough image for
-    // 100% to round to a non-zero radius — a handful of pixels doesn't,
+    // 100% to round to a non-zero radius; a handful of pixels doesn't,
     // which is correct behavior, just not useful for exercising the blur
     // itself.
     BokehStep step(model, /*strengthPercent=*/100);
@@ -221,7 +221,7 @@ void TestBokehStep::reblendCachedReflectsTheRequestedStrengthNotTheStoredOne() {
 
     // reblendCached()'s argument is independent of strengthPercent_ (a live
     // slider drag passes its in-flight value explicitly rather than storing
-    // it first, see BokehStep.h) — the stored value (50) must stay
+    // it first, see BokehStep.h); the stored value (50) must stay
     // untouched by this call.
     const QImage atZero = step.reblendCached(0);
     const QImage atMax = step.reblendCached(100);

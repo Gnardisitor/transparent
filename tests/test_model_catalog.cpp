@@ -71,7 +71,7 @@ void TestModelCatalog::findByFilenameFindsKnownAndRejectsUnknown() {
 
 void TestModelCatalog::defaultsAreInTheCatalog() {
     // main.cpp falls back to these filenames whenever nothing is persisted
-    // in QSettings yet — a default that isn't itself a real catalog entry
+    // in QSettings yet; a default that isn't itself a real catalog entry
     // would silently fail to load on first run.
     QVERIFY(ModelCatalog::findByFilename(
                 ModelCatalog::defaultFilename(ModelCategory::Segmentation)) != nullptr);

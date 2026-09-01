@@ -38,6 +38,11 @@ private slots:
     void writeThenReadPreservesOpaqueColorApproximately();
     void writeThenReadPreservesTransparencyHole();
     void writeFailsOnEmptyFrameList();
+
+    void writerRoundTripsFramesEncodedOneAtATime();
+    void writerFinishFailsIfNothingWasEncoded();
+    void writerEncodeFailsOnSizeMismatch();
+    void writerDestructorFinishesTheFile();
 };
 
 void TestGifIO::isAnimatedIsFalseForStaticImage() {
@@ -119,6 +124,79 @@ void TestGifIO::writeFailsOnEmptyFrameList() {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     QVERIFY(!GifIO::writeFrames(dir.filePath("empty.gif"), {}));
+}
+
+void TestGifIO::writerRoundTripsFramesEncodedOneAtATime() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("stream.gif");
+
+    // No palette source: the first encoded frame defines the shared
+    // palette, so its colors must cover the whole animation for an exact
+    // round-trip. This is the BatchRunner/MainWindow streaming pattern.
+    QImage halfRedHalfGreen = solidFrame(8, Qt::red);
+    for (int y = 0; y < 8; ++y) {
+        for (int x = 4; x < 8; ++x) {
+            halfRedHalfGreen.setPixelColor(x, y, Qt::green);
+        }
+    }
+    QImage swapped = halfRedHalfGreen.mirrored(true, false);
+
+    GifIO::Writer writer;
+    QVERIFY(writer.open(path));
+    QVERIFY(writer.encode({halfRedHalfGreen, 20}));
+    QVERIFY(writer.encode({swapped, 40}));
+    QVERIFY(writer.finish());
+
+    QVERIFY(GifIO::isAnimated(path));
+    const std::vector<GifIO::Frame> readBack = GifIO::readFrames(path);
+    QCOMPARE(readBack.size(), 2u);
+    QCOMPARE(readBack[0].delayCs, 20);
+    QCOMPARE(readBack[1].delayCs, 40);
+    QCOMPARE(readBack[0].image.pixelColor(0, 0), QColor(Qt::red));
+    QCOMPARE(readBack[0].image.pixelColor(7, 0), QColor(Qt::green));
+    QCOMPARE(readBack[1].image.pixelColor(0, 0), QColor(Qt::green));
+    QCOMPARE(readBack[1].image.pixelColor(7, 0), QColor(Qt::red));
+}
+
+void TestGifIO::writerFinishFailsIfNothingWasEncoded() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    // Covers the unreadable-input path: open() succeeds, but without any
+    // encode() there is no valid GIF to finish.
+    GifIO::Writer writer;
+    QVERIFY(writer.open(dir.filePath("never-started.gif")));
+    QVERIFY(!writer.finish());
+    QVERIFY(!QFile::exists(dir.filePath("never-started.gif")));
+}
+
+void TestGifIO::writerEncodeFailsOnSizeMismatch() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    GifIO::Writer writer;
+    QVERIFY(writer.open(dir.filePath("mismatch.gif")));
+    QVERIFY(writer.encode({solidFrame(8, Qt::red), 10}));
+    QVERIFY(!writer.encode({solidFrame(16, Qt::red), 10}));
+}
+
+void TestGifIO::writerDestructorFinishesTheFile() {
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath("dtor.gif");
+
+    {
+        GifIO::Writer writer;
+        QVERIFY(writer.open(path));
+        QVERIFY(writer.encode({solidFrame(8, Qt::red), 10}));
+        // No finish(): the destructor must still close giflib cleanly
+        // enough that the frames written so far are a readable GIF.
+    }
+
+    const std::vector<GifIO::Frame> readBack = GifIO::readFrames(path);
+    QCOMPARE(readBack.size(), 1u);
+    QCOMPARE(readBack[0].image.pixelColor(0, 0), QColor(Qt::red));
 }
 
 QTEST_MAIN(TestGifIO)

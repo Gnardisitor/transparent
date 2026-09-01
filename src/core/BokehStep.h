@@ -9,6 +9,8 @@
 // the mask's own soft edge. No separate depth model.
 class BokehStep : public PipelineStep {
 public:
+    using PipelineStep::process; // keep the stateless 1-arg overload visible alongside the 2-arg override.
+
     static constexpr int kDefaultStrengthPercent = 50;
 
     // QSettings key for the persisted strength (read in main.cpp, written
@@ -18,7 +20,7 @@ public:
     explicit BokehStep(std::shared_ptr<SegmentationModel> model,
                         int strengthPercent = kDefaultStrengthPercent);
 
-    QImage process(const QImage& input) const override;
+    QImage process(const QImage& input, PipelineRun& run) const override;
     QString name() const override { return QStringLiteral("Bokeh"); }
 
     // False if the underlying model failed to load.

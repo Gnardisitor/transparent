@@ -20,9 +20,11 @@
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QImageReader>
 #include <QLabel>
 #include <QListWidget>
 #include <QMenu>
@@ -30,10 +32,13 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QStandardPaths>
+#include <QTemporaryFile>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -143,7 +148,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
         statusLabel_->setText(QStringLiteral("Drop an image or a folder of images here"));
     } else {
         statusLabel_->setText(
-            QStringLiteral("No background-removal model loaded — check models/ (see README)"));
+            QStringLiteral("No background-removal model loaded. Check models/ (see README)"));
         statusLabel_->setStyleSheet(QStringLiteral("color: #b00;"));
     }
     layout->addWidget(statusLabel_);
@@ -213,8 +218,10 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     // pick up the results.
     connect(&processingWatcher_, &QFutureWatcher<QImage>::finished, this,
             &MainWindow::onProcessingFinished);
-    connect(&gifProcessingWatcher_, &QFutureWatcher<std::vector<GifIO::Frame>>::finished, this,
+    connect(&gifProcessingWatcher_, &QFutureWatcher<GifProcessResult>::finished, this,
             &MainWindow::onGifProcessingFinished);
+    connect(&batchWatcher_, &QFutureWatcher<BatchResult>::finished, this,
+            &MainWindow::onBatchFinished);
     connect(&segmentationModelWatcher_, &QFutureWatcher<std::shared_ptr<SegmentationModel>>::finished,
             this, &MainWindow::onSegmentationModelLoaded);
     connect(&upscaleModelWatcher_, &QFutureWatcher<std::shared_ptr<UpscaleModel>>::finished, this,
@@ -429,26 +436,19 @@ void MainWindow::loadImage(const QString& path) {
     }
     stopGifPreviewAnimation();
 
-    if (GifIO::isAnimated(path)) {
-        std::vector<GifIO::Frame> frames = GifIO::readFrames(path);
-        if (frames.empty()) {
-            statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
-            return;
-        }
-        isAnimatedGifSource_ = true;
-        sourceGifFrames_ = std::move(frames);
-        sourceImage_ = sourceGifFrames_.front().image;
-    } else {
-        const QImage source(path);
-        if (source.isNull()) {
-            statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
-            return;
-        }
-        isAnimatedGifSource_ = false;
-        sourceGifFrames_.clear();
-        sourceImage_ = source;
+    isAnimatedGifSource_ = GifIO::isAnimated(path);
+
+    // Only the first frame is decoded here, just enough to preview the raw
+    // source; the processing worker decodes the rest. GIF source frames are
+    // never kept, they stream through the pipeline one at a time.
+    QImageReader reader(path);
+    const QImage firstFrame = reader.read();
+    if (firstFrame.isNull()) {
+        statusLabel_->setText(QStringLiteral("Could not read image: %1").arg(path));
+        return;
     }
-    resultGifFrames_.clear();
+    sourceImagePath_ = path;
+    sourceImage_ = firstFrame;
 
     exportButton_->setText(isAnimatedGifSource_ ? QStringLiteral("Export GIF")
                                                   : QStringLiteral("Export PNG"));
@@ -461,14 +461,14 @@ void MainWindow::loadImage(const QString& path) {
         resultImage_ = sourceImage_;
         updatePreview();
         exportButton_->setEnabled(!resultImage_.isNull());
-        statusLabel_->setText(QStringLiteral("Loaded — press Start Processing"));
+        statusLabel_->setText(QStringLiteral("Loaded. Press Start Processing"));
     } else {
         reprocess();
     }
 }
 
 void MainWindow::reprocess() {
-    const bool hasSource = isAnimatedGifSource_ ? !sourceGifFrames_.empty() : !sourceImage_.isNull();
+    const bool hasSource = isAnimatedGifSource_ ? !sourceImagePath_.isEmpty() : !sourceImage_.isNull();
     // modelLoading_ too: a swap writes the steps' model pointers on the GUI
     // thread while this reads them on a worker thread.
     if (!hasSource || processing_ || modelLoading_ || bokehPreviewInFlight_) {
@@ -487,17 +487,66 @@ void MainWindow::reprocess() {
     const std::vector<size_t> stepOrder = advanced ? currentAdvancedStepOrder() : std::vector<size_t>();
 
     if (isAnimatedGifSource_) {
-        const std::vector<GifIO::Frame> input = sourceGifFrames_;
-        gifProcessingWatcher_.setFuture(QtConcurrent::run(
-            [pipeline, input, advanced, stepOrder]() -> std::vector<GifIO::Frame> {
-                std::vector<GifIO::Frame> output = input;
-                for (GifIO::Frame& frame : output) {
-                    if (pipeline) {
-                        frame.image = advanced ? pipeline->run(frame.image, stepOrder)
-                                                : pipeline->run(frame.image);
-                    }
+        // The result GIF streams into a fresh temp file; only downscaled
+        // preview frames come back to the GUI.
+        gifResultFile_ = std::make_unique<QTemporaryFile>(
+            QDir::temp().filePath(QStringLiteral("transparent-XXXXXX.gif")));
+        if (!gifResultFile_->open()) {
+            processing_ = false;
+            setControlsEnabled(true);
+            statusLabel_->setText(QStringLiteral("Could not create a temporary file"));
+            return;
+        }
+        const QString resultPath = gifResultFile_->fileName();
+        // giflib opens the path itself; a second open handle would conflict
+        // on Windows. QTemporaryFile removes the file on destruction.
+        gifResultFile_->close();
+
+        const QString sourcePath = sourceImagePath_;
+        QSize previewBounds = previewLabel_->size();
+        if (previewBounds.isEmpty()) {
+            previewBounds = QSize(400, 300);
+        }
+
+        gifProcessingWatcher_.setFuture(
+            QtConcurrent::run([pipeline, sourcePath, resultPath, advanced, stepOrder,
+                                previewBounds]() -> GifProcessResult {
+                GifProcessResult result;
+
+                GifIO::Writer writer;
+                if (!writer.open(resultPath)) {
+                    return result;
                 }
-                return output;
+
+                GifIO::Reader reader(sourcePath);
+                while (std::optional<GifIO::Frame> frame = reader.next()) {
+                    QImage processed;
+                    if (pipeline) {
+                        processed = advanced ? pipeline->run(frame->image, stepOrder)
+                                             : pipeline->run(frame->image);
+                    } else {
+                        processed = frame->image;
+                    }
+                    if (!writer.encode({processed, frame->delayCs})) {
+                        return result;
+                    }
+
+                    // Preview copy: only shrink, mirroring updatePreview().
+                    QImage preview = processed;
+                    if (preview.width() > previewBounds.width() ||
+                        preview.height() > previewBounds.height()) {
+                        preview = preview.scaled(previewBounds, Qt::KeepAspectRatio,
+                                                  Qt::SmoothTransformation);
+                    }
+                    result.previewFrames.push_back({std::move(preview), frame->delayCs});
+                }
+
+                // finish() fails when no frame was encoded (unreadable input).
+                result.ok = writer.finish();
+                if (!result.ok) {
+                    result.previewFrames.clear();
+                }
+                return result;
             }));
     } else {
         const QImage input = sourceImage_;
@@ -521,34 +570,43 @@ void MainWindow::onProcessingFinished() {
 }
 
 void MainWindow::onGifProcessingFinished() {
-    resultGifFrames_ = gifProcessingWatcher_.result();
+    const GifProcessResult result = gifProcessingWatcher_.result();
     processing_ = false;
     spinner_->stop();
     setControlsEnabled(true);
+    gifPreviewFrames_ = result.previewFrames;
     gifPreviewFrameIndex_ = 0;
-    resultImage_ = resultGifFrames_.empty() ? QImage() : resultGifFrames_.front().image;
+    if (result.ok && !gifPreviewFrames_.empty()) {
+        resultImage_ = gifPreviewFrames_.front().image;
+        exportButton_->setEnabled(true);
+        statusLabel_->clear();
+    } else {
+        resultImage_ = QImage();
+        exportButton_->setEnabled(false);
+        statusLabel_->setText(QStringLiteral("Could not process the GIF"));
+    }
     updatePreview();
-    exportButton_->setEnabled(!resultGifFrames_.empty());
     startGifPreviewAnimation();
 }
 
 void MainWindow::advanceGifPreviewFrame() {
-    if (resultGifFrames_.empty()) {
+    if (gifPreviewFrames_.empty()) {
         return;
     }
-    gifPreviewFrameIndex_ = (gifPreviewFrameIndex_ + 1) % static_cast<int>(resultGifFrames_.size());
-    resultImage_ = resultGifFrames_[static_cast<size_t>(gifPreviewFrameIndex_)].image;
+    gifPreviewFrameIndex_ =
+        (gifPreviewFrameIndex_ + 1) % static_cast<int>(gifPreviewFrames_.size());
+    resultImage_ = gifPreviewFrames_[static_cast<size_t>(gifPreviewFrameIndex_)].image;
     updatePreview();
     const int delayMs =
-        std::max(10, resultGifFrames_[static_cast<size_t>(gifPreviewFrameIndex_)].delayCs * 10);
+        std::max(10, gifPreviewFrames_[static_cast<size_t>(gifPreviewFrameIndex_)].delayCs * 10);
     gifPreviewTimer_->start(delayMs);
 }
 
 void MainWindow::startGifPreviewAnimation() {
-    if (resultGifFrames_.size() <= 1) {
+    if (gifPreviewFrames_.size() <= 1) {
         return;
     }
-    const int delayMs = std::max(10, resultGifFrames_.front().delayCs * 10);
+    const int delayMs = std::max(10, gifPreviewFrames_.front().delayCs * 10);
     gifPreviewTimer_->start(delayMs);
 }
 
@@ -680,8 +738,9 @@ void MainWindow::onClearImageClicked() {
     }
     stopGifPreviewAnimation();
     isAnimatedGifSource_ = false;
-    sourceGifFrames_.clear();
-    resultGifFrames_.clear();
+    sourceImagePath_.clear();
+    gifResultFile_.reset();
+    gifPreviewFrames_.clear();
     sourceImage_ = QImage();
     resultImage_ = QImage();
     previewLabel_->setPixmap(QPixmap());
@@ -723,23 +782,42 @@ void MainWindow::runBatch(const QString& folderPath) {
 
     processing_ = true;
     setControlsEnabled(false);
+    batchOutputFolder_ = outputFolder;
+    statusLabel_->setText(QStringLiteral("Batch starting..."));
 
-    const BatchResult result = batchRunner_.run(
-        folderPath, outputFolder,
-        [this](int done, int total, const QString& fileName) {
-            statusLabel_->setText(
-                QStringLiteral("Processing %1/%2: %3").arg(done).arg(total).arg(fileName));
-            QApplication::processEvents();
-        },
-        stepOrder);
+    // BatchRunner is copied by value so the worker never touches MainWindow
+    // state directly; progress is marshalled to the GUI thread per image,
+    // completion arrives via onBatchFinished().
+    const BatchRunner runner = batchRunner_;
+    const QPointer<MainWindow> guard(this);
+    batchWatcher_.setFuture(
+        QtConcurrent::run([runner, folderPath, outputFolder, stepOrder, guard]() -> BatchResult {
+            return runner.run(
+                folderPath, outputFolder,
+                [guard](int done, int total, const QString& fileName) {
+                    if (guard) {
+                        QMetaObject::invokeMethod(guard, &MainWindow::showBatchProgress,
+                                                   Qt::QueuedConnection, done, total, fileName);
+                    }
+                },
+                stepOrder);
+        }));
+}
 
+void MainWindow::showBatchProgress(int done, int total, QString fileName) {
+    statusLabel_->setText(
+        QStringLiteral("Processing %1/%2: %3").arg(done).arg(total).arg(fileName));
+}
+
+void MainWindow::onBatchFinished() {
+    const BatchResult result = batchWatcher_.result();
     processing_ = false;
     setControlsEnabled(true);
 
     if (result.failedFiles.isEmpty()) {
         statusLabel_->setText(QStringLiteral("Batch done: %1 image(s) exported to %2")
                                    .arg(result.succeeded)
-                                   .arg(outputFolder));
+                                   .arg(batchOutputFolder_));
     } else {
         statusLabel_->setText(QStringLiteral("Batch done: %1 succeeded, %2 failed (%3)")
                                    .arg(result.succeeded)
@@ -777,18 +855,41 @@ void MainWindow::updatePreview() {
     repositionOverlays();
 }
 
+QString MainWindow::defaultExportPath(const QString& sourcePath, const QString& suffix) {
+    QString name = QStringLiteral("output");
+    if (!sourcePath.isEmpty()) {
+        const QString base = QFileInfo(sourcePath).completeBaseName();
+        if (!base.isEmpty()) {
+            name = base + QStringLiteral("_cutout");
+        }
+    }
+    QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+    if (dir.isEmpty()) {
+        dir = QDir::homePath();
+    }
+    // Absolute, because a relative default resolves against the process's
+    // cwd, which is arbitrary under AppImage launches.
+    return QDir(dir).filePath(name + suffix);
+}
+
 void MainWindow::onExportClicked() {
     if (isAnimatedGifSource_) {
-        if (resultGifFrames_.empty()) {
+        if (!gifResultFile_ || gifResultFile_->fileName().isEmpty()) {
             return;
         }
         const QString path = QFileDialog::getSaveFileName(
-            this, QStringLiteral("Export GIF"), QStringLiteral("output.gif"),
+            this, QStringLiteral("Export GIF"),
+            defaultExportPath(sourceImagePath_, QStringLiteral(".gif")),
             QStringLiteral("GIF image (*.gif)"));
         if (path.isEmpty()) {
             return;
         }
-        GifIO::writeFrames(path, resultGifFrames_);
+        // getSaveFileName() has already confirmed overwriting.
+        QFile::remove(path);
+        if (!QFile::copy(gifResultFile_->fileName(), path)) {
+            QMessageBox::warning(this, QStringLiteral("Export failed"),
+                                  QStringLiteral("Could not write %1").arg(path));
+        }
         return;
     }
 
@@ -796,7 +897,8 @@ void MainWindow::onExportClicked() {
         return;
     }
     const QString path = QFileDialog::getSaveFileName(
-        this, QStringLiteral("Export PNG"), QStringLiteral("output.png"),
+        this, QStringLiteral("Export PNG"),
+        defaultExportPath(sourceImagePath_, QStringLiteral(".png")),
         QStringLiteral("PNG image (*.png)"));
     if (path.isEmpty()) {
         return;

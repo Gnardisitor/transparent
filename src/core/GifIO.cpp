@@ -128,44 +128,101 @@ bool isAnimated(const QString& path) {
     return reader.imageCount() > 1;
 }
 
+Reader::Reader(const QString& path) : reader_(path) {}
+
+std::optional<Frame> Reader::next() {
+    const QImage image = reader_.read();
+    if (image.isNull()) {
+        return std::nullopt;
+    }
+    Frame frame;
+    frame.image = image.convertToFormat(QImage::Format_RGBA8888);
+    const int delayMs = reader_.nextImageDelay();
+    // 0 delay means "as fast as possible"; write a small default instead
+    // of a delay GIF players special-case.
+    frame.delayCs = delayMs > 0 ? std::max(1, delayMs / 10) : 10;
+    return frame;
+}
+
 std::vector<Frame> readFrames(const QString& path) {
     std::vector<Frame> frames;
-    QImageReader reader(path);
-    if (!reader.canRead()) {
-        return frames;
-    }
-
-    QImage image = reader.read();
-    while (!image.isNull()) {
-        Frame frame;
-        frame.image = image.convertToFormat(QImage::Format_RGBA8888);
-        const int delayMs = reader.nextImageDelay();
-        // 0 delay means "as fast as possible"; write a small default instead
-        // of a delay GIF players special-case.
-        frame.delayCs = delayMs > 0 ? std::max(1, delayMs / 10) : 10;
-        frames.push_back(std::move(frame));
-        image = reader.read();
+    Reader reader(path);
+    while (std::optional<Frame> frame = reader.next()) {
+        frames.push_back(std::move(*frame));
     }
     return frames;
 }
 
-bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
-    if (frames.empty()) {
-        return false;
-    }
+// Writer internals: giflib state plus the fixed shared palette.
+struct WriterImpl {
+    QString path;
 
-    const int width = frames.front().image.width();
-    const int height = frames.front().image.height();
-    if (width <= 0 || height <= 0) {
-        return false;
-    }
+    ColorMapObject* colorMap = nullptr;
+    GifFileType* gif = nullptr;
+    int width = 0;
+    int height = 0;
+    int realColorCount = 0;
+    int transparentIndex = -1;
+    bool ok = false;
+    bool wroteAny = false;
+    bool finished = false;
+    std::vector<Rgb> palette;
+    std::unordered_map<uint32_t, int> colorCache;
+    std::vector<GifByteType> indices;
 
-    // One shared palette, built from a bounded sample so quantization cost
-    // doesn't scale with resolution * frame count.
+    int errorCode = 0;
+
+    bool startFile();
+};
+
+// Builds the shared palette from opaque-pixel samples: a transparency slot
+// is always reserved (pipeline steps may add alpha the source didn't have),
+// transparent pixels never enter the samples, and giflib's color table
+// size is rounded up to a power of two.
+void buildPalette(WriterImpl& impl, std::vector<Rgb> samples) {
+    impl.palette = quantize(std::move(samples), 255); // slot 255 = transparency
+    impl.realColorCount = static_cast<int>(impl.palette.size());
+    impl.transparentIndex = impl.realColorCount;
+    impl.palette.push_back({0, 0, 0});
+
+    int colorCount = 2;
+    while (colorCount < static_cast<int>(impl.palette.size())) {
+        colorCount *= 2;
+    }
+    impl.palette.resize(colorCount, Rgb{0, 0, 0});
+
+    std::vector<GifColorType> gifColors(impl.palette.size());
+    for (size_t i = 0; i < impl.palette.size(); ++i) {
+        gifColors[i] = {impl.palette[i].r, impl.palette[i].g, impl.palette[i].b};
+    }
+    impl.colorMap = GifMakeMapObject(colorCount, gifColors.data());
+}
+
+// Deep sample of one frame's opaque pixels. Used for the first encoded
+// frame when no palette source was given at construction.
+void buildPaletteFromFrame(WriterImpl& impl, const QImage& rgbaFrame) {
+    constexpr int kMaxSamples = 20000;
+    const int total = rgbaFrame.width() * rgbaFrame.height();
+    std::vector<Rgb> samples;
+    if (total > 0) {
+        const int stride = std::max(1, total / kMaxSamples);
+        const uchar* bits = rgbaFrame.constBits();
+        for (int i = 0; i < total; i += stride) {
+            const uchar* px = bits + static_cast<ptrdiff_t>(i) * 4;
+            if (px[3] < 128) {
+                continue;
+            }
+            samples.push_back({px[0], px[1], px[2]});
+        }
+    }
+    buildPalette(impl, std::move(samples));
+}
+
+// Same sampling, spread over every frame of a palette source.
+void buildPaletteFromFrames(WriterImpl& impl, const std::vector<Frame>& frames) {
     constexpr int kMaxSamples = 20000;
     const int perFrameBudget = std::max(1, kMaxSamples / static_cast<int>(frames.size()));
     std::vector<Rgb> samples;
-    bool anyTransparent = false;
     for (const Frame& f : frames) {
         const QImage rgba = f.image.convertToFormat(QImage::Format_RGBA8888);
         const int total = rgba.width() * rgba.height();
@@ -174,101 +231,161 @@ bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
         for (int i = 0; i < total; i += stride) {
             const uchar* px = bits + static_cast<ptrdiff_t>(i) * 4;
             if (px[3] < 128) {
-                anyTransparent = true;
                 continue;
             }
             samples.push_back({px[0], px[1], px[2]});
         }
     }
+    buildPalette(impl, std::move(samples));
+}
 
-    // Reserve a palette slot for transparency when needed.
-    const int maxColors = anyTransparent ? 255 : 256;
-    std::vector<Rgb> palette = quantize(std::move(samples), maxColors);
-    const int realColorCount = static_cast<int>(palette.size());
-    const int transparentIndex = anyTransparent ? realColorCount : -1;
-    if (anyTransparent) {
-        palette.push_back({0, 0, 0});
-    }
-
-    // giflib's color table size must be a power of two.
-    int colorCount = 2;
-    while (colorCount < static_cast<int>(palette.size())) {
-        colorCount *= 2;
-    }
-    palette.resize(colorCount, Rgb{0, 0, 0});
-
-    std::vector<GifColorType> gifColors(palette.size());
-    for (size_t i = 0; i < palette.size(); ++i) {
-        gifColors[i] = {palette[i].r, palette[i].g, palette[i].b};
-    }
-    ColorMapObject* colorMap = GifMakeMapObject(colorCount, gifColors.data());
-    if (!colorMap) {
-        return false;
-    }
-
-    int errorCode = 0;
+// Writes screen descriptor, shared palette and loop extension. Palette and
+// frame size must be fixed before this runs.
+bool WriterImpl::startFile() {
     const QByteArray pathBytes = QFile::encodeName(path);
-    GifFileType* gif = EGifOpenFileName(pathBytes.constData(), false, &errorCode);
-    if (!gif) {
-        GifFreeMapObject(colorMap);
+    gif = EGifOpenFileName(pathBytes.constData(), false, &errorCode);
+    if (!gif || !colorMap) {
         return false;
     }
 
     // Background index matches the transparent slot so DISPOSE_BACKGROUND
     // clears to nothing between frames.
-    const int backgroundIndex = transparentIndex >= 0 ? transparentIndex : 0;
-    bool ok = EGifPutScreenDesc(gif, width, height, GifBitSize(colorCount), backgroundIndex,
-                                 colorMap) == GIF_OK;
+    bool ok = EGifPutScreenDesc(gif, width, height,
+                                 GifBitSize(static_cast<int>(palette.size())),
+                                 transparentIndex, colorMap) == GIF_OK;
 
     // NETSCAPE2.0 extension: makes an animated GIF loop forever.
     if (ok) {
-        static const unsigned char kNetscape[] = {'N', 'E', 'T', 'S', 'C', 'A', 'P',
-                                                    'E', '2', '.', '0'};
+        static const unsigned char kNetscape[] = {'N', 'E', 'T', 'S', 'C', 'A',
+                                                   'P', 'E', '2', '.', '0'};
         static const unsigned char kLoopForever[] = {1, 0, 0};
         ok = EGifPutExtensionLeader(gif, APPLICATION_EXT_FUNC_CODE) == GIF_OK &&
              EGifPutExtensionBlock(gif, sizeof(kNetscape), kNetscape) == GIF_OK &&
              EGifPutExtensionBlock(gif, sizeof(kLoopForever), kLoopForever) == GIF_OK &&
              EGifPutExtensionTrailer(gif) == GIF_OK;
     }
+    return ok;
+}
 
-    std::unordered_map<uint32_t, int> colorCache;
-    std::vector<GifByteType> indices(static_cast<size_t>(width) * static_cast<size_t>(height));
-    for (size_t frameIdx = 0; ok && frameIdx < frames.size(); ++frameIdx) {
-        const QImage rgba = frames[frameIdx].image.convertToFormat(QImage::Format_RGBA8888);
-        if (rgba.width() != width || rgba.height() != height) {
-            ok = false;
-            break;
-        }
+Writer::Writer(const std::vector<Frame>& paletteSourceFrames) : impl_(std::make_unique<WriterImpl>()) {
+    if (!paletteSourceFrames.empty()) {
+        buildPaletteFromFrames(*impl_, paletteSourceFrames);
+        impl_->width = paletteSourceFrames.front().image.width();
+        impl_->height = paletteSourceFrames.front().image.height();
+        impl_->indices.resize(static_cast<size_t>(impl_->width) * impl_->height);
+    }
+}
 
-        const uchar* bits = rgba.constBits();
-        for (int i = 0; i < width * height; ++i) {
-            const uchar* px = bits + static_cast<ptrdiff_t>(i) * 4;
-            if (transparentIndex >= 0 && px[3] < 128) {
-                indices[static_cast<size_t>(i)] = static_cast<GifByteType>(transparentIndex);
-            } else {
-                indices[static_cast<size_t>(i)] = static_cast<GifByteType>(nearestPaletteIndex(
-                    palette, realColorCount, {px[0], px[1], px[2]}, colorCache));
-            }
-        }
+Writer::~Writer() {
+    if (!impl_->finished) {
+        finish();
+    }
+}
 
-        GraphicsControlBlock gcb{};
-        // Each frame is a complete image, not a delta, so it must clear to
-        // background first; DISPOSE_DO_NOT would ghost previous frames
-        // through transparent pixels.
-        gcb.DisposalMode = DISPOSE_BACKGROUND;
-        gcb.DelayTime = frames[frameIdx].delayCs;
-        gcb.TransparentColor = transparentIndex >= 0 ? transparentIndex : NO_TRANSPARENT_COLOR;
+bool Writer::open(const QString& path) {
+    if (path.isEmpty()) {
+        return false;
+    }
+    impl_->path = path;
+    return true;
+}
 
-        GifByteType extension[4];
-        EGifGCBToExtension(&gcb, extension);
-        ok = EGifPutExtension(gif, GRAPHICS_EXT_FUNC_CODE, sizeof(extension), extension) == GIF_OK &&
-             EGifPutImageDesc(gif, 0, 0, width, height, false, nullptr) == GIF_OK &&
-             EGifPutLine(gif, indices.data(), width * height) == GIF_OK;
+bool Writer::encode(const Frame& frame) {
+    if (!impl_->ok && impl_->gif) {
+        return false; // a previous encode failed; the file is incomplete
     }
 
-    ok = EGifCloseFile(gif, &errorCode) == GIF_OK && ok;
-    GifFreeMapObject(colorMap);
-    return ok;
+    const QImage rgba = frame.image.convertToFormat(QImage::Format_RGBA8888);
+    if (!impl_->gif) {
+        // First encode: fix the frame size and palette (when not given at
+        // construction), then write the header.
+        if (rgba.width() <= 0 || rgba.height() <= 0) {
+            return false;
+        }
+        impl_->width = rgba.width();
+        impl_->height = rgba.height();
+        if (!impl_->colorMap) {
+            buildPaletteFromFrame(*impl_, rgba);
+            impl_->indices.resize(static_cast<size_t>(impl_->width) * impl_->height);
+        }
+        if (!impl_->startFile()) {
+            impl_->ok = false;
+            return false;
+        }
+        impl_->ok = true;
+    }
+
+    if (rgba.width() != impl_->width || rgba.height() != impl_->height) {
+        impl_->ok = false;
+        return false;
+    }
+
+    const int width = impl_->width;
+    const int height = impl_->height;
+    const uchar* bits = rgba.constBits();
+    for (int i = 0; i < width * height; ++i) {
+        const uchar* px = bits + static_cast<ptrdiff_t>(i) * 4;
+        if (px[3] < 128) {
+            impl_->indices[static_cast<size_t>(i)] =
+                static_cast<GifByteType>(impl_->transparentIndex);
+        } else {
+            impl_->indices[static_cast<size_t>(i)] = static_cast<GifByteType>(
+                nearestPaletteIndex(impl_->palette, impl_->realColorCount, {px[0], px[1], px[2]},
+                                     impl_->colorCache));
+        }
+    }
+
+    GraphicsControlBlock gcb{};
+    // Each frame is a complete image, not a delta, so it must clear to
+    // background first; DISPOSE_DO_NOT would ghost previous frames
+    // through transparent pixels.
+    gcb.DisposalMode = DISPOSE_BACKGROUND;
+    gcb.DelayTime = frame.delayCs;
+    gcb.TransparentColor = impl_->transparentIndex;
+
+    GifByteType extension[4];
+    EGifGCBToExtension(&gcb, extension);
+    impl_->ok = EGifPutExtension(impl_->gif, GRAPHICS_EXT_FUNC_CODE, sizeof(extension),
+                                   extension) == GIF_OK &&
+                 EGifPutImageDesc(impl_->gif, 0, 0, width, height, false, nullptr) == GIF_OK &&
+                 EGifPutLine(impl_->gif, impl_->indices.data(), width * height) == GIF_OK;
+    if (impl_->ok) {
+        impl_->wroteAny = true;
+    }
+    return impl_->ok;
+}
+
+bool Writer::finish() {
+    if (impl_->finished) {
+        return impl_->ok && impl_->wroteAny;
+    }
+    impl_->finished = true;
+    if (impl_->gif) {
+        impl_->ok = EGifCloseFile(impl_->gif, &impl_->errorCode) == GIF_OK && impl_->ok;
+        impl_->gif = nullptr;
+    }
+    if (impl_->colorMap) {
+        GifFreeMapObject(impl_->colorMap);
+        impl_->colorMap = nullptr;
+    }
+    return impl_->ok && impl_->wroteAny;
+}
+
+bool writeFrames(const QString& path, const std::vector<Frame>& frames) {
+    if (frames.empty()) {
+        return false;
+    }
+
+    Writer writer(frames); // all frames are in memory: sample the palette from all of them
+    if (!writer.open(path)) {
+        return false;
+    }
+    for (const Frame& frame : frames) {
+        if (!writer.encode(frame)) {
+            return false;
+        }
+    }
+    return writer.finish();
 }
 
 } // namespace GifIO

@@ -9,9 +9,10 @@
 // alpha image. Runtime-specific detail lives behind that seam.
 class BackgroundRemovalStep : public PipelineStep {
 public:
+    using PipelineStep::process; // keep the stateless 1-arg overload visible alongside the 2-arg override.
     explicit BackgroundRemovalStep(std::shared_ptr<SegmentationModel> model);
 
-    QImage process(const QImage& input) const override;
+    QImage process(const QImage& input, PipelineRun& run) const override;
     QString name() const override { return QStringLiteral("Background Removal"); }
 
     // False if the underlying model failed to load.

@@ -9,9 +9,10 @@
 // alpha to match, so transparency from earlier steps survives.
 class UpscaleStep : public PipelineStep {
 public:
+    using PipelineStep::process; // keep the stateless 1-arg overload visible alongside the 2-arg override.
     explicit UpscaleStep(std::shared_ptr<UpscaleModel> model);
 
-    QImage process(const QImage& input) const override;
+    QImage process(const QImage& input, PipelineRun& /*run*/) const override;
     QString name() const override { return QStringLiteral("Upscale"); }
 
     // False if the underlying model failed to load.

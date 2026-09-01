@@ -8,6 +8,7 @@
 #include <QFutureWatcher>
 #include <QImage>
 #include <QMainWindow>
+#include <QTemporaryFile>
 
 #include <memory>
 #include <vector>
@@ -36,6 +37,13 @@ public:
                          std::shared_ptr<ModelManager> modelManager = nullptr,
                          QWidget* parent = nullptr);
 
+    // Absolute default path for the export dialog: Pictures (falling back
+    // to home) plus a name derived from `sourcePath` ("<source>_cutout", or
+    // "output" without a source). Always absolute: a relative default
+    // resolves against the process's cwd, which is arbitrary under AppImage
+    // launches.
+    static QString defaultExportPath(const QString& sourcePath, const QString& suffix);
+
 protected:
     void dragEnterEvent(QDragEnterEvent* event) override;
     void dropEvent(QDropEvent* event) override;
@@ -48,7 +56,8 @@ private slots:
     void onClearImageClicked();
     void onProcessingFinished();
     void onGifProcessingFinished();
-    // Cycles resultGifFrames_ through the preview, re-arming
+    void onBatchFinished();
+    // Cycles gifPreviewFrames_ through the preview, re-arming
     // gifPreviewTimer_ (single-shot) with each frame's own delay.
     void advanceGifPreviewFrame();
     // Loads the chosen model off the GUI thread and swaps it live into the
@@ -84,7 +93,11 @@ private:
     bool isBokehTheActiveOutputStep() const;
 
     void loadImage(const QString& path);
+    // Runs BatchRunner over a folder on a background thread; progress
+    // arrives via showBatchProgress() and completion via onBatchFinished().
     void runBatch(const QString& folderPath);
+    // Status-label update marshalled off the batch worker thread.
+    void showBatchProgress(int done, int total, QString fileName);
     // Runs the pipeline on the source (each GIF frame individually) on a
     // background thread so inference never blocks the GUI.
     void reprocess();
@@ -129,14 +142,31 @@ private:
     QImage sourceImage_;
     QImage resultImage_;
     QFutureWatcher<QImage> processingWatcher_;
-    // Set when the dropped file is an animated GIF. sourceImage_ and
-    // resultImage_ still track the current frame, so the rest of the class
-    // needs no separate GIF check.
+
+    // Animated GIF handling. Source frames are never kept: the processing
+    // worker decodes them from sourceImagePath_, streams each through the
+    // pipeline into gifResultFile_ (the full-resolution result), and keeps
+    // only a downscaled copy per frame in gifPreviewFrames_ for the
+    // animation. Export copies gifResultFile_ to the chosen location.
+    struct GifProcessResult {
+        bool ok = false;
+        std::vector<GifIO::Frame> previewFrames;
+    };
     bool isAnimatedGifSource_ = false;
-    std::vector<GifIO::Frame> sourceGifFrames_;
-    std::vector<GifIO::Frame> resultGifFrames_;
-    QFutureWatcher<std::vector<GifIO::Frame>> gifProcessingWatcher_;
+    // Where the source was loaded from. The GIF processing worker re-reads
+    // frames from it; the export dialog derives its default name from it.
+    QString sourceImagePath_;
+    std::unique_ptr<QTemporaryFile> gifResultFile_;
+    std::vector<GifIO::Frame> gifPreviewFrames_;
+    QFutureWatcher<GifProcessResult> gifProcessingWatcher_;
     QTimer* gifPreviewTimer_;
     int gifPreviewFrameIndex_ = 0;
+
+    // Folder batch runs on a background thread; BatchRunner's per-image
+    // progress callback is marshalled back via showBatchProgress().
+    QFutureWatcher<BatchResult> batchWatcher_;
+    // Output folder of the in-flight batch, for the completion status text.
+    QString batchOutputFolder_;
+
     bool processing_ = false;
 };

@@ -3,6 +3,7 @@
 # Widgets or main().
 add_library(transparent_core STATIC
   core/Pipeline.cpp
+  core/PipelineRun.cpp
   core/VisionCppSegmentationModel.cpp
   core/BackgroundRemovalStep.cpp
   core/VisionCppUpscaleModel.cpp

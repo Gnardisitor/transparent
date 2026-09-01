@@ -1,23 +1,29 @@
 #include "Pipeline.h"
 
+#include "PipelineRun.h"
+
 void Pipeline::addStep(std::shared_ptr<PipelineStep> step) {
     steps_.push_back({std::move(step), true});
 }
 
 QImage Pipeline::run(const QImage& input) const {
+    // One shared run per image: the subject mask is inferred at most once,
+    // no matter how many steps need it.
+    PipelineRun run;
     QImage current = input;
     for (const auto& entry : steps_) {
         if (entry.enabled) {
-            current = entry.step->process(current);
+            current = entry.step->process(current, run);
         }
     }
     return current;
 }
 
 QImage Pipeline::run(const QImage& input, const std::vector<size_t>& stepOrder) const {
+    PipelineRun run;
     QImage current = input;
     for (size_t index : stepOrder) {
-        current = steps_.at(index).step->process(current);
+        current = steps_.at(index).step->process(current, run);
     }
     return current;
 }

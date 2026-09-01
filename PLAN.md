@@ -33,7 +33,7 @@ ncnn was the original choice for the same vendor-neutral reasoning, but its conv
 
 **Depth-of-field / bokeh.** The first cut is mask-only, blurring everything outside `BackgroundRemovalStep`'s mask with a feathered edge. No separate depth model. True depth-graduated blur is possible via vision.cpp's Depth-Anything V2, but only the Small checkpoint (Apache-2.0, 50.6MB) is license-clean. Base and Large are CC-BY-NC-4.0, the same restriction that ruled out RMBG and MODNet. It would also need real implementation work (edge haloing, fine detail reading as a blob, deriving a focus plane from relative depth). Deferred until mask-only proves visibly insufficient.
 
-**Bokeh strength control. Done.** A 0-100% slider in the Settings dialog maps to a blur radius scaled to the image's shorter side (5% at 100%), so the effect looks consistent across resolutions. Adjusting it live-previews by re-blending the mask `BokehStep` cached from the last real `process()` call, off the GUI thread via `QtConcurrent`. The blur is cheap CPU work, not model inference. Live preview only updates the screen when Bokeh is the last active step (`MainWindow::isBokehTheActiveOutputStep()`). The slider still updates and persists otherwise. Bokeh always uses whichever segmentation model Background Removal is set to, and swapping that model invalidates the cache.
+**Bokeh strength control. Done.** A 0-100% slider in the Settings dialog maps to a blur radius scaled to the image's shorter side (5% at 100%), so the effect looks consistent across resolutions. Adjusting it live-previews by re-blending the mask `BokehStep` cached from the last real `process()` call, off the GUI thread via `QtConcurrent`. The blur is cheap CPU work, not model inference. Live preview only updates the screen when Bokeh is the last active step (`MainWindow::isBokehTheActiveOutputStep()`). The slider still updates and persists otherwise. Bokeh always uses whichever segmentation model Background Removal is set to, and swapping that model invalidates the cache. Both steps take the subject mask from a shared `PipelineRun` (`src/core/PipelineRun.h`), so it is inferred once per image even when both are enabled; a size change in between (the upscaler) forces a recompute.
 
 ### Video/GIF scope (GIF only for now, no FFmpeg)
 
@@ -41,7 +41,7 @@ Animated GIF and real video are different asks. GIF uses Qt's decoder plus a sma
 
 GIF encoding uses giflib (vcpkg, MIT). Qt's bundled GIF plugin turned out to be read-only (confirmed via `QImageWriter::supportedImageFormats()`). giflib only reads/writes the container, so `GifIO` (`src/core/GifIO.h`) also owns a small median-cut color quantizer for building the output palette.
 
-Inherent GIF limitations (not bugs) are a 256-color-max palette shared across all frames (rebuilt via median-cut) and on/off-only transparency, where `BackgroundRemovalStep`'s soft mask edge gets thresholded at 128.
+Inherent GIF limitations (not bugs) are a 256-color-max palette shared across all frames (rebuilt via median-cut) and on/off-only transparency, where `BackgroundRemovalStep`'s soft mask edge gets thresholded at 128. GIFs are also streamed, not materialized: `GifIO::Reader`/`Writer` (`src/core/GifIO.h`) handle one frame at a time, so peak memory is one source frame plus one processed frame no matter the animation length. The streamed palette is fixed by the first processed frame's colors.
 
 ### Background removal model (BiRefNet-lite)
 

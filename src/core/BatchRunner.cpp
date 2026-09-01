@@ -44,17 +44,7 @@ BatchResult BatchRunner::run(const QString& inputFolder, const QString& outputFo
         bool ok = false;
         if (!claimedOutputNames.contains(outputName)) {
             if (animated) {
-                std::vector<GifIO::Frame> frames = GifIO::readFrames(info.filePath());
-                ok = !frames.empty();
-                if (ok && pipeline_) {
-                    for (GifIO::Frame& frame : frames) {
-                        frame.image = stepOrder.has_value() ? pipeline_->run(frame.image, *stepOrder)
-                                                              : pipeline_->run(frame.image);
-                    }
-                }
-                if (ok) {
-                    ok = GifIO::writeFrames(outputDir.filePath(outputName), frames);
-                }
+                ok = processAnimatedGif(info.filePath(), outputDir.filePath(outputName), stepOrder);
             } else {
                 const QImage source(info.filePath());
                 ok = !source.isNull();
@@ -84,4 +74,33 @@ BatchResult BatchRunner::run(const QString& inputFolder, const QString& outputFo
     }
 
     return result;
+}
+
+// Frames stream one at a time: decode, run through the pipeline, encode,
+// release. Peak memory is a single source frame plus a single processed
+// frame, not the whole processed animation (a 4x upscale multiplies every
+// frame's footprint by 16). The palette is fixed by the first processed
+// frame, so its colors define the whole output.
+bool BatchRunner::processAnimatedGif(const QString& inputPath, const QString& outputPath,
+                                       const std::optional<std::vector<size_t>>& stepOrder) const {
+    GifIO::Writer writer;
+    if (!writer.open(outputPath)) {
+        return false;
+    }
+
+    GifIO::Reader reader(inputPath);
+    while (std::optional<GifIO::Frame> frame = reader.next()) {
+        QImage processed;
+        if (pipeline_) {
+            processed = stepOrder.has_value() ? pipeline_->run(frame->image, *stepOrder)
+                                               : pipeline_->run(frame->image);
+        } else {
+            processed = frame->image;
+        }
+        if (!writer.encode({std::move(processed), frame->delayCs})) {
+            return false;
+        }
+    }
+    // finish() fails when no frame was encoded, covering unreadable input.
+    return writer.finish();
 }

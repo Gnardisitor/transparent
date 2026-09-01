@@ -2,7 +2,7 @@
 
 UpscaleStep::UpscaleStep(std::shared_ptr<UpscaleModel> model) : model_(std::move(model)) {}
 
-QImage UpscaleStep::process(const QImage& input) const {
+QImage UpscaleStep::process(const QImage& input, PipelineRun& /*run*/) const {
     if (!isReady() || input.isNull()) {
         return input;
     }

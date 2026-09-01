@@ -99,7 +99,7 @@ if [[ "${#style_plugins[@]}" -gt 0 && -n "${kde_platformtheme}" ]]; then
   fi
   "${linuxdeploy}" --appdir "${appdir}" "${bundle_args[@]}"
 else
-  echo "No KDE Plasma theme integration found on this build machine (looked in ${qt_plugins_dir}) — skipping, AppImage falls back to the bundled QDarkStyleSheet look"
+  echo "No KDE Plasma theme integration found on this build machine (looked in ${qt_plugins_dir}); skipping, AppImage falls back to the bundled QDarkStyleSheet look"
 fi
 
 wayland_platform="$(find "${qt_plugins_dir}/platforms" -maxdepth 1 -iname '*wayland*.so' 2>/dev/null | sort | head -n1)"
@@ -119,7 +119,7 @@ if [[ -n "${wayland_platform}" ]]; then
   done
   "${linuxdeploy}" --appdir "${appdir}" "${bundle_args[@]}"
 else
-  echo "No Wayland platform plugin found on this build machine (looked in ${qt_plugins_dir}/platforms) — skipping, AppImage falls back to XWayland"
+  echo "No Wayland platform plugin found on this build machine (looked in ${qt_plugins_dir}/platforms); skipping, AppImage falls back to XWayland"
 fi
 
 "${linuxdeploy}" \
