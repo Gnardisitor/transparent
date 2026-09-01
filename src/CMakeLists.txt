@@ -33,6 +33,16 @@ target_compile_definitions(transparent PRIVATE
   TRANSPARENT_MODELS_DIR="${CMAKE_BINARY_DIR}/models"
 )
 
+# Windowed subsystem so launching the app does not open a console window.
+# WIN32_EXECUTABLE switches the MSVC linker to /SUBSYSTEM:WINDOWS and makes
+# Qt6::Core pull in its entry-point shim (WinMain -> main).
+if(WIN32)
+  enable_language(RC)
+  set_target_properties(transparent PROPERTIES WIN32_EXECUTABLE TRUE)
+  # Embed the application icon (Explorer, taskbar, shortcuts).
+  target_sources(transparent PRIVATE ${CMAKE_SOURCE_DIR}/resources/app.rc)
+endif()
+
 # AppImage packaging (packaging/build-appimage.sh) installs into an AppDir
 # using these same rules, following freedesktop's hicolor icon theme
 # convention so linuxdeploy picks the icon up automatically.

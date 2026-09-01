@@ -1,0 +1,4 @@
+// Windows application resources. ID 1 is the icon Explorer and the taskbar
+// pick up. The .ico is generated from icon.png (256x256 PNG frame, which the
+// Windows shell supports natively).
+1 ICON "icon.ico"

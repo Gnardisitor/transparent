@@ -1,10 +1,10 @@
 # transparent
 
-Local, GPU-accelerated background removal for Linux. No cloud calls, no subscriptions, no telemetry.
+Local, GPU-accelerated background removal. Linux-first, with a working native Windows build. No cloud calls, no subscriptions, no telemetry.
 
 ## Status
 
-Linux MVP in progress. Background removal, 4x upscaling, and a mask-only bokeh blur all work end to end. Drag an image in for one processed PNG out. Drag a folder in and pick an output folder to batch every supported image in it. Drag an animated GIF in to run every frame through the pipeline and export a new GIF. Simple mode runs one operation at a time. Advanced mode runs several in any order. Inference runs via [vision.cpp](https://github.com/Acly/vision.cpp) (BiRefNet-lite and Real-ESRGAN) with Vulkan GPU acceleration and a CPU fallback. Bokeh reuses BiRefNet-lite's own mask, no separate model. GIF decoding uses Qt's own plugin. Encoding uses [giflib](http://giflib.sourceforge.net/) (MIT) plus a small built-in color quantizer. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (true video support, full depth-graduated blur, colorization, Windows/macOS ports).
+Linux MVP in progress. Background removal, 4x upscaling, and a mask-only bokeh blur all work end to end. Drag an image in for one processed PNG out. Drag a folder in and pick an output folder to batch every supported image in it. Drag an animated GIF in to run every frame through the pipeline and export a new GIF. Simple mode runs one operation at a time. Advanced mode runs several in any order. Inference runs via [vision.cpp](https://github.com/Acly/vision.cpp) (BiRefNet-lite and Real-ESRGAN) with Vulkan GPU acceleration and a CPU fallback. Bokeh reuses BiRefNet-lite's own mask, no separate model. GIF decoding uses Qt's own plugin. Encoding uses [giflib](http://giflib.sourceforge.net/) (MIT) plus a small built-in color quantizer. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (true video support, full depth-graduated blur, colorization, CI and packaging for Windows, macOS port).
 
 ## Why
 
@@ -19,7 +19,9 @@ Prerequisites (all platforms):
 - Qt6 base package (Widgets, Network, Concurrent, and Test all ship in qtbase)
 - git (this repo uses a submodule)
 
-vcpkg is vendored as a git submodule and supplies the Vulkan headers/loader and giflib. CMake's `FetchContent` fetches [vision.cpp](https://github.com/Acly/vision.cpp) and its ggml backend from source, pinned to a tagged release. One `default` preset covers every platform. The first configure takes a while. It bootstraps vcpkg, compiles vision.cpp/ggml including Vulkan shader compilation, and downloads checksum-verified model weights. Later builds are incremental.
+vcpkg is vendored as a git submodule and supplies the Vulkan headers/loader and giflib. CMake's `FetchContent` fetches [vision.cpp](https://github.com/Acly/vision.cpp) and its ggml backend from source, pinned to a tagged release. The `default` preset covers Linux and macOS; a separate `windows` preset picks the right vcpkg triplet. The first configure takes a while. It bootstraps vcpkg, compiles vision.cpp/ggml including Vulkan shader compilation, and downloads checksum-verified model weights. Later builds are incremental.
+
+Everything is linked statically except Qt and the Vulkan loader. vision.cpp's headers mark its API with `__declspec(dllimport)` on MSVC unless `VISP_STATIC_DEFINE` is defined, which upstream does not support — so on Windows a small local patch ([cmake/patch-visioncpp-static.cmake](cmake/patch-visioncpp-static.cmake), wired in via `FetchContent`'s `PATCH_COMMAND`) adds that convention, and a top-level `add_compile_definitions(VISP_STATIC_DEFINE)` applies it to both sides of the link. Without it, linking fails with `LNK2019` on `__imp_...` symbols. The `windows` preset also uses vcpkg's `x64-windows-static-md` triplet, which builds giflib (and everything else vcpkg provides) as static libraries while keeping the dynamic C runtime that the prebuilt Qt binaries require — the plain `x64-windows-static` triplet would force `/MT` and clash with Qt's `/MD`.
 
 ### Linux
 
@@ -69,12 +71,12 @@ ctest --test-dir build
 Run the app:
 
 ```bash
-./build/src/transparent
+./build/transparent
 ```
 
-### Windows (experimental)
+### Windows
 
-Windows is not a supported, CI-tested target yet. PLAN.md plans a MinGW-w64 cross-build from the Linux CI runner, and that work has not started. The native MSVC route below follows the same CMake setup as Linux but has not been verified end to end, so expect a snag or two.
+The native MSVC route works and is exercised with every change. PLAN.md still plans a MinGW-w64 cross-build from the Linux CI runner for packaging; that work has not started.
 
 1. **Visual Studio 2022** with the *Desktop development with C++* workload. CMake and Ninja ship with VS.
 
@@ -88,7 +90,7 @@ Windows is not a supported, CI-tested target yet. PLAN.md plans a MinGW-w64 cros
    Clone somewhere short, e.g. `C:\Dev\transparent`:
 
    ```bat
-   git clone <this-repo-url> C:\Dev\transparent
+   git clone https://forge.db-serve.com/dbajan/transparent.git C:\Dev\transparent
    cd C:\Dev\transparent
    git submodule update --init
    ```
@@ -96,8 +98,7 @@ Windows is not a supported, CI-tested target yet. PLAN.md plans a MinGW-w64 cros
 3. **Qt 6.8+ for MSVC 2022 64-bit**, from the Qt online installer (pick the `MSVC 2022 64-bit` component, not the MinGW one) or with aqtinstall:
 
    ```bat
-   pip install aqtinstall
-   aqt install-qt windows desktop 6.8 win64_msvc2022_64
+   uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O C:\Qt
    ```
 
 4. **Vulkan SDK** from [LunarG](https://vulkan.lunarg.com/sdk/home). Its `glslc` compiles ggml's Vulkan shaders. vcpkg already supplies the loader and headers.
@@ -106,29 +107,30 @@ Windows is not a supported, CI-tested target yet. PLAN.md plans a MinGW-w64 cros
 
    ```bat
    set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%PATH%
-   cmake --preset default
+   cmake --preset windows
    cmake --build build
    ```
 
-   Adjust the Qt path to the version you installed.
+   Adjust the Qt path to the version you installed. The `windows` preset sets the `x64-windows-static-md` vcpkg triplet, so giflib is linked statically and only the Vulkan loader ends up as a runtime DLL. vcpkg copies `vulkan-1.dll` next to the executables automatically.
 
 6. Run the tests, then the app:
 
    ```bat
    ctest --test-dir build
-   build\src\transparent.exe
+   build\transparent.exe
    ```
 
    The exe needs the Qt DLLs on `PATH` to start, which step 5's `set PATH` provides. For a self-contained folder:
 
    ```bat
    mkdir portable\bin
-   copy build\src\transparent.exe portable\bin\
+   copy build\transparent.exe portable\bin\
    C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe --release --compiler-runtime portable\bin\transparent.exe
+   copy build\vulkan-1.dll portable\bin\
    xcopy /E /I build\models portable\share\transparent\models\
    ```
 
-   The app finds models in `..\share\transparent\models` relative to the exe. There is no installer yet (see PLAN.md).
+   `windeployqt` pulls in the Qt DLLs, the MSVC runtime, and the platform and image-format plugins; the explicit copy adds the Vulkan loader. giflib is static, so there is no `gif.dll` to ship. The app finds models in `..\share\transparent\models` relative to the exe. There is no installer yet (see PLAN.md).
 
 ## Packaging
 

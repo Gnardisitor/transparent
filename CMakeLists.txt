@@ -8,14 +8,20 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo)
 endif()
 
+# vision.cpp is consumed as a static library (BUILD_SHARED_LIBS=OFF below).
+# Its headers mark the public API with VISP_API, which is __declspec(dllimport)
+# on MSVC unless VISP_STATIC_DEFINE is defined (added by
+# cmake/patch-visioncpp-static.cmake). Without it the link fails with
+# LNK2019 on "__imp_..." symbols.
+
+# Consumers of visioncpp (transparent_core, tests) need the patched header's
+# VISP_STATIC_DEFINE so VISP_API expands to nothing instead of dllimport.
+# This propagates into the visioncpp subdirectory too, where it is also
+# correct: the static library then exports nothing via dllexport.
+add_compile_definitions(VISP_STATIC_DEFINE)
+
 option(TRANSPARENT_BUILD_TESTS "Build unit tests" ON)
 
-# vision.cpp (ggml-based inference, MIT) — chosen over ncnn because its
-# conversion/op coverage handles the transformer + deformable-conv ops
-# BiRefNet needs; ncnn's pnnx/onnx2ncnn tooling cannot translate them (see
-# PLAN.md, "Inference engine"). Vendored via FetchContent rather than
-# vcpkg (no vcpkg port exists) and pinned to a tagged release for
-# reproducibility.
 include(FetchContent)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(VISP_VULKAN ON CACHE BOOL "" FORCE)
@@ -24,18 +30,15 @@ FetchContent_Declare(visioncpp
   GIT_REPOSITORY https://github.com/Acly/vision.cpp.git
   GIT_TAG v0.3.1
   GIT_SUBMODULES_RECURSE TRUE
+  PATCH_COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_LIST_DIR}/cmake/patch-visioncpp-static.cmake"
 )
 FetchContent_MakeAvailable(visioncpp)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent Network Test)
 qt_standard_project_setup()
 
-# giflib (vcpkg, MIT): reads/writes the GIF container only, no quantizer of
-# its own — GifIO builds the output palette itself (see src/core/GifIO.cpp).
 find_package(GIF REQUIRED)
 
-# Scoped to our own subdirectories, added after vision.cpp so its (non-Qt)
-# targets don't pick these up and warn about missing Qt AUTOGEN support.
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
