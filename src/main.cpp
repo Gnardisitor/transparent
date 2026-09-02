@@ -74,7 +74,12 @@ int main(int argc, char** argv) {
         pipeline->addStep(backgroundRemoval);
     }
 
-    // Denoising runs before upscaling (upscaling amplifies noise); see PLAN.md.
+    auto bokeh = std::make_shared<BokehStep>(segmentationModel, bokehStrengthPercent);
+    if (bokeh->isReady()) {
+        pipeline->addStep(bokeh);
+    }
+
+    // Denoising before upscaling (upscaling amplifies noise); see PLAN.md.
     auto denoiseModel =
         std::make_shared<VisionCppDenoiseModel>(modelManager->pathFor(denoiseFilename));
     auto denoise = std::make_shared<DenoiseStep>(denoiseModel);
@@ -87,11 +92,6 @@ int main(int argc, char** argv) {
     auto upscale = std::make_shared<UpscaleStep>(upscaleModel);
     if (upscale->isReady()) {
         pipeline->addStep(upscale);
-    }
-
-    auto bokeh = std::make_shared<BokehStep>(segmentationModel, bokehStrengthPercent);
-    if (bokeh->isReady()) {
-        pipeline->addStep(bokeh);
     }
 
     MainWindow window(pipeline, modelManager);
