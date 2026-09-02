@@ -28,13 +28,11 @@ include(FetchContent)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(VISP_VULKAN ON CACHE BOOL "" FORCE)
 set(VISP_TESTS OFF CACHE BOOL "" FORCE)
-# TODO: point GIT_REPOSITORY/GIT_TAG at the pushed fork
-# (forge.db-serve.com/dbajan/vision.cpp) pinned to a tag once it exists. Until
-# then, configure with:
-#   -DFETCHCONTENT_SOURCE_DIR_VISIONCPP=$HOME/Documents/Dev/vision.cpp
+# The vision.cpp fork adds the SCUNet denoising architecture (see PLAN.md,
+# "Denoising"). Tracks the fork's main branch for now.
 FetchContent_Declare(visioncpp
-  GIT_REPOSITORY https://github.com/Acly/vision.cpp.git
-  GIT_TAG v0.3.1
+  GIT_REPOSITORY https://forge.db-serve.com/dbajan/vision.cpp.git
+  GIT_TAG main
   GIT_SUBMODULES_RECURSE TRUE
 )
 FetchContent_MakeAvailable(visioncpp)
