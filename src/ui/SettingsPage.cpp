@@ -36,7 +36,7 @@ SettingsPage::SettingsPage(ModelManager* modelManager, QWidget* parent)
     // Single import entry point for advanced users: the architecture routes
     // the file to its category automatically (the directory scan is the
     // primary mechanism and works without this button).
-    auto* addButton = new QPushButton(QStringLiteral("Add model from disk\u2026"), this);
+    auto* addButton = new QPushButton(QStringLiteral("Add model from disk"), this);
     addButton->setToolTip(
         QStringLiteral("Copy a .gguf file into the models folder; it is classified by "
                        "architecture and appears in its section"));

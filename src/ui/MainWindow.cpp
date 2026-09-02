@@ -220,7 +220,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     auto* fullSizeButton = new QPushButton(QStringLiteral("1:1"), zoomStrip_);
     // Legibility: the strip floats over arbitrary images, so it paints a
     // semi-transparent dark scrim with white text (the video-player
-    // pattern) — readable over anything, no image sampling heuristics.
+    // pattern), readable over anything, no image sampling heuristics.
     zoomStrip_->setAttribute(Qt::WA_StyledBackground, true);
     zoomStrip_->setStyleSheet(
         QStringLiteral("background-color: rgba(18, 18, 18, 170); border-radius: 6px;"));

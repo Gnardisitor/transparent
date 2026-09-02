@@ -46,14 +46,14 @@ QString settingsKey(ModelCategory category);
 // model seam can load it (birefnet -> Segmentation, scunet -> Denoise,
 // esrgan -> Upscale). nullopt for unknown architectures and for arches
 // vision.cpp recognizes but this app has no seam for (migan, depthanything,
-// mobile-sam) — the model-management scan uses this to classify files.
+// mobile-sam. The model-management scan uses this to classify files.
 std::optional<ModelCategory> categoryForArchitecture(const QString& architecture);
 
 // True when vision.cpp knows the architecture at all, even without a seam.
 bool isRecognizedArchitecture(const QString& architecture);
 
 // The architecture that loads in `category` (the inverse of the mapping
-// above); empty string if none — used in user-facing error messages.
+// above); empty string if none. Used in user-facing error messages.
 QString architectureForCategory(ModelCategory category);
 
 } // namespace ModelCatalog

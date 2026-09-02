@@ -1,4 +1,4 @@
-# transparent: local, GPU-accelerated background removal for Linux
+# transparent: local, GPU-accelerated image editing
 
 ## Motivation
 
@@ -11,12 +11,12 @@ Existing local background-removal tools are bad. They have broken or missing GPU
 - License: GPLv3 for this repo's own code (see [LICENSE](LICENSE)).
   - Originally planned as LGPLv3 to match Qt's own license. LGPL exists so proprietary software can link against your code without inheriting your license, which is why Qt itself is LGPL. `transparent` is an application, not a library, so that reason does not apply. GPLv3 requires anyone distributing a modified version to share the source under the same terms, which is what was actually wanted. It was chosen over GPLv2 for the explicit patent grant. Nothing here needs GPLv2 compatibility.
   - Compatible with dynamically-linked LGPLv3 Qt and MIT-licensed vision.cpp/BiRefNet-lite. GPL projects commonly dynamically link LGPL libraries.
-  - Bundled components keep their own licenses (Qt LGPLv3 dynamically linked, vision.cpp/ggml MIT, BiRefNet-lite MIT). They are listed in-repo and in the About screen.
+  - Bundled components keep their own licenses (Qt LGPLv3 dynamically linked, vision.cpp/ggml MIT, BiRefNet-lite and SCUNet MIT/Apache-2.0, Real-ESRGAN BSD-3-Clause, giflib MIT). They are listed in the README.
 
 ## Platform rollout (sequential, not parallel)
 
-1. Linux: build this first, completely, before touching anything else.
-2. Windows: after Linux fully works and is validated on real hardware (AMD RX 9070 XT, RDNA4).
+1. Linux, done.
+2. Windows, done natively (MSVC). The MinGW cross-build from the Linux runner remains an option for CI packaging.
 3. macOS: last priority, dependent on getting help from a Mac-owning friend to test.
 
 ## Architecture decisions
@@ -49,7 +49,7 @@ Inherent GIF limitations (not bugs) are a 256-color-max palette shared across al
 - Other models considered:
   - RMBG-1.4/2.0 (BRIA): rejected, `bria-rmbg-1.4` license (source-available, non-commercial,
     redistribution-restricted). IS-Net-family architecture, unsupported by vision.cpp. Users who
-    want it anyway can bring their own weights via the custom-model import (below); this project
+    want it anyway can bring their own weights via the custom-model import (see Custom models); this project
     never redistributes the weights.
   - MODNet: rejected, CC BY-NC-SA 4.0, non-commercial and portrait-specific.
   - IS-Net/U2Net: a viable fallback (Apache-2.0, smaller/faster) but visibly lower quality.
@@ -61,181 +61,50 @@ Both `SegmentationModel` (BiRefNet-lite / BiRefNet-dynamic / BiRefNet full) and 
 
 Adjustable upscale *amount* (as opposed to model choice) was considered and rejected. Every compatible Real-ESRGAN checkpoint is fixed at 4x, and the only different-shaped file (`RealESRGAN-x4plus_anime-6B`) is a "plus" variant `esrgan_load_model` does not support.
 
+Design:
+
+- Curated registry with a fixed list per category (name, filename, license, size, download URL, SHA256). Entries are marked Installed or Not Installed by filename match.
+- On-demand download for everything beyond the defaults. Each entry has its own download button, runs off the GUI thread, and is verified against its known SHA256 before being marked Installed. A mismatch deletes the file and shows an error. Manually placing a file in the models directory works the same way.
+- Models live in `QStandardPaths::AppDataLocation`, off the build tree. The build-tree path is wiped by clean rebuilds and is no place for manual placement.
+- First run needs no network access. The three defaults (BiRefNet-lite, Remacri, and SCUNet real GAN) are fetched at CMake configure time, and the app copies them into AppData on first launch if missing.
+- Selecting a model applies live, no restart. The steps take their model through a swappable `shared_ptr`, and loading a new model runs asynchronously with a spinner using the same `QtConcurrent`/`QFutureWatcher` pattern `MainWindow` already uses.
+- It lives in a Settings dialog opened from a menu-bar action next to Help, not in the Simple/Advanced mode selector. Model choice and bokeh strength are set-occasionally preferences, and nesting them in Advanced mode would lock Simple-mode users out of picking BiRefNet-dynamic for a large photo.
+- Persisted via `QSettings`.
+
 ### Custom models (done)
 
-Goal: let the user add models that are deliberately not in the curated catalog — the motivating
-case is RMBG-1.4, which cannot be pre-hosted due to its license. Designed to stay minimal:
-the audience is advanced users doing manual setup once.
+Users can add models that are not in the curated catalog. The motivating case is RMBG-1.4, which this project cannot host due to its license. Built to stay minimal, since the audience is advanced users setting things up once.
 
-Facts the design rests on (verified in the fork and upstream):
+Facts the design rests on:
 
-- vision.cpp recognizes exactly six GGUF architectures: `birefnet`, `scunet`, `esrgan`, `migan`,
-  `depthanything`, `mobile-sam`. Transparent's seams are single-architecture per category:
-  Segmentation = birefnet only, Denoise = scunet only, Upscale = esrgan only.
-- RMBG-1.4 is IS-Net/U2-Net-family — **not** loadable today, and Acly's ecosystem does not
-  support it either (krita-vision-tools = SAM/BiRefNet/MI-GAN, pinning the same vision.cpp base
-  commit this fork started from). Supporting it means a new architecture in the fork: converter
-  support, arch code, parity tests — the SCUNet recipe, deferred as its own future project.
-- A GGUF's `general.architecture` is readable cheaply through visp's `model_file` metadata, so
-  imports/scans can validate architecture without loading weights.
+- vision.cpp recognizes six GGUF architectures: `birefnet`, `scunet`, `esrgan`, `migan`, `depthanything`, `mobile-sam`. The seams here are single-architecture per category: Segmentation = birefnet, Denoise = scunet, Upscale = esrgan.
+- RMBG-1.4 is IS-Net/U2-Net family, so it does not load today, and Acly's ecosystem does not support it either. Loading it means a new architecture in the fork (converter support, arch code, parity tests), deferred as its own future project.
+- A GGUF's `general.architecture` is readable cheaply from metadata alone, so files are classified without loading weights.
 
 Decisions:
 
-- **Folder-as-state: the models directory is scanned for `.gguf` files.** Recognized
-  architectures auto-register under their category (`birefnet` → Segmentation, `scunet` →
-  Denoise, `esrgan` → Upscale). No import dialog, no naming step, **no persisted custom-model
-  list** — the folder is the state, so files deleted behind the app's back simply disappear on
-  the next scan (stale QSettings entries were the alternative; rejected).
-- Display name = filename; custom rows show "user-provided (license not verified)" instead of a
-  license, since nothing about an imported file can be verified.
-- **One "Add model from disk…" button at the bottom of Settings**: file dialog → validate
-  architecture → copy into the models directory → row appears in the right section (the
-  architecture routes it; the button needs no category input). A convenience over
-  hand-copying into AppData; the scan works without it.
-- **Unrecognized `.gguf` files render as grayed rows** with a tooltip naming the architecture
-  (e.g. "Unsupported architecture: rmbg") — answers "why doesn't my file show up?" without any
-  extra flow. Covers arches vision.cpp knows but transparent has no seam for (`migan`,
-  `depthanything`, `mobile-sam`) the same way.
-- **Removal is file-manager deletion only** this round; no delete UI.
-- **Licensing rule: transparent-models never hosts non-commercial weights.** License-restricted
-  models (RMBG-1.4 etc.) enter only via user import; the project's repos and download flow stay
-  permissively licensed (matching the GPLv3 + permissive-models position already in PLAN).
+- Folder-as-state. The models directory is scanned for `.gguf` files, and recognized architectures register under their category (`birefnet` to Segmentation, `scunet` to Denoise, `esrgan` to Upscale). No import dialog, no naming step, no persisted custom-model list. The folder is the state, so a deleted file disappears on the next scan.
+- Display name is the filename. Custom rows read "user-provided (license not verified)".
+- One "Add model from disk…" button at the bottom of Settings. File dialog, architecture validation, copy into the models directory, and the row appears in the right section on its own. The architecture routes the file, so the button needs no category input.
+- Unrecognized `.gguf` files render as grayed rows with a tooltip naming the architecture. This also covers arches vision.cpp knows but this app has no seam for (`migan`, `depthanything`, `mobile-sam`).
+- Removal is file-manager deletion only this round, no delete UI.
+- Licensing rule: transparent-models never hosts non-commercial weights. Restricted models enter only via user import.
 
-Implementation notes: the scan reads only GGUF headers via `gguf_init_from_file` with
-metadata-only params (never tensor data), so it is cheap even with multi-GB files present;
-Settings triggers a rescan on open (`showEvent`), at construction, and after any import;
-`ModelManager::isInstalled`/`pathFor` are already filename-based, so selection persistence
-(`models/<category>Model` keys) works for custom files unchanged. Conflict handling for the
-Add button: if the chosen file's name collides with an existing model, refuse and ask the user
-to rename the file. As built: `ModelManager::scanModels()`/`importModel()` +
-`ModelCatalog::categoryForArchitecture`/`isRecognizedArchitecture`/`architectureForCategory`
-(classification tests in test_model_manager/test_model_catalog); SettingsPage renders scanned
-rows per category (no download button), an "Other files in the models folder" group for
-unusable files, and re-applies the persisted active selection after each rescan so a custom
-active model keeps its radio check.
-
-Design:
-
-- Curated registry, not free-form file browsing. The selection screen knows a fixed list per category (name, filename, license, size, download URL, SHA256), scans the models directory, and marks each entry Installed or Not Installed by filename match. Browsing for an arbitrary `.gguf` is deferred, since vision.cpp's loaders are architecture-specific and would fail on an incompatible file anyway.
-- On-demand download for everything beyond the defaults. Each entry has its own download button, runs off the GUI thread, and is verified against its known SHA256 before being marked Installed. A mismatch deletes the file and shows an error. Manually placing a file in the models directory works the same way.
-- Models live in `QStandardPaths::AppDataLocation`, off the build tree. The build-tree path is wiped by clean rebuilds and is no place for manual placement.
-- First run still needs no network access. The three defaults (BiRefNet-lite, Remacri, and SCUNet real GAN) are fetched at CMake configure time, and the app copies them into AppData on first launch if missing.
-- Selecting a model applies live, no restart. The steps take their model through a swappable `shared_ptr`, and loading a new model runs asynchronously with a spinner using the same `QtConcurrent`/`QFutureWatcher` pattern `MainWindow` already uses.
-- It lives in a Settings dialog opened from a menu-bar action next to Help, not in the Simple/Advanced mode selector. Model choice and bokeh strength are set-occasionally-then-forget preferences, and nesting them in Advanced mode would lock Simple-mode users out of picking BiRefNet-dynamic for a large photo.
-- Persisted via `QSettings`.
+The scan reads GGUF headers only, so it is cheap regardless of file sizes. Settings rescans on open and after an import, and re-applies the persisted active selection afterwards.
 
 ### Denoising (SCUNet)
 
-Decided in full in a grilling session; recorded here so it survives across sessions. Nothing is committed or pushed until explicitly asked.
+**Model: SCUNet (Swin-Conv-UNet), checkpoints `scunet_color_real_gan` and `scunet_color_real_psnr`, both Apache-2.0.** Blind real-world color denoising, ~18M params. The GAN variant is the default (sharper, PSNR smoother). Rejected alternatives: SwinIR denoise (non-blind, fixed sigma, ~12x the FLOPs), NAFNet (weak color real-denoise coverage), Restormer (heavy, no permissive GGUF ecosystem), realesr-general-x4v3 (an upsampler, and visp's `esrgan` arch is RRDB-only). The fixed-sigma gaussian SCUNet variants are niche and skipped.
 
-**Model: SCUNet (Swin-Conv-UNet), checkpoints `scunet_color_real_gan` and `scunet_color_real_psnr`, both Apache-2.0.** Blind real-world color denoising (trained on SIDD), ~18M params, 67 GFLOPs. GAN variant is the default (sharper; PSNR is smoother). The alternatives were checked and rejected: SwinIR denoise (non-blind, fixed-σ checkpoints, ~12× the FLOPs), NAFNet (weak color real-denoise coverage), Restormer (heavy, no permissive GGUF ecosystem), realesr-general-x4v3 (denoise+SR combo; visp's `esrgan` arch is RRDB-only and it's an upsampler, not a standalone denoiser). The fixed-σ gaussian SCUNet variants are skipped: not blind, niche. SCUNet's Swin v1 blocks can build on the backbone visp already implements for BiRefNet.
+**Fork strategy: a private fork of vision.cpp, not upstream PRs.** Upstream has no denoising architecture, and visp's public headers don't expose the conv/attention/UNet primitives, so implementing SCUNet in `transparent` would mean reimplementing visp internals against raw ggml. The fork lives at [forge.db-serve.com/dbajan/vision.cpp](https://forge.db-serve.com/dbajan/vision.cpp), is based on upstream `main`, and tracks its `main` branch. Set a `GIT_TAG` when a fork tag exists. The SCUNet port is in `src/visp/arch/scunet.*`, converter support in `scripts/convert.py`, and per-layer parity tests in `tests/test_scunet.py` (10 cases, all passing, CLI output within 1 LSB of the PyTorch reference on CPU and Vulkan).
 
-**Fork strategy: a private fork of vision.cpp, not upstream PRs.** vision.cpp v0.3.1 has no denoising architecture (families: sam, birefnet, depth_anything, migan, esrgan), and upstream `main` is only ~8 build/packaging commits past it — no denoising either. visp's *public* headers don't expose the conv/attention/UNet primitives, so implementing SCUNet inside `transparent` would mean reimplementing visp internals against raw ggml. The fork is the clean route, and no upstream PR is wanted by design: the fork exists for this project's needs and its maintenance burden stays here, not in a diverging patch series against Acly's repo.
+**ggml update policy:** the submodule pins Acly's vision patch series (`vision-20260331`: conv2d_deform, cwhn im2col, f16 repeat) which upstream llama.cpp lacks. Don't bump unprompted. Bump when Acly publishes a newer `vision-*` tag, or when profiling shows a ggml-bound bottleneck, and re-run the parity suite afterwards.
 
-Fork specifics (implemented in the `vision.cpp` working copy):
+**Hosting:** the Forgejo LFS repo [transparent-models](https://forge.db-serve.com/dbajan/transparent-models) holds `scunet-color-real-gan-F16.gguf` and `scunet-color-real-psnr-F16.gguf` (F16, ~36MB each, SHA256s in `ModelCatalog.cpp`). The GAN checkpoint is also a CMake-time default. The PSNR variant is download-on-demand.
 
-- **Working copy: `~/Documents/Dev/vision.cpp/`**, based on upstream `main` (`26a7529`) exactly as checked out — the extra commits are build hardening (static ggml option, SO version, symbol hiding) with an identical dependency graph (both v0.3.1 and main depend on Acly's llama.cpp submodule for ggml; only its `ggml/` subdirectory is built).
-- **Cleanup: delete `.github/workflows/` only** (`ci.yml`, `pkg-check.yml` — they can't run on this infra). Keep cli (needed for debugging against reference outputs), tests (parity testing lives there), docs, and bindings; a minimal diff is the point of forking without PRs.
-- **`VISP_STATIC_DEFINE` support is folded directly into the fork** (main still lacks it), and `transparent` drops its `cmake/patch-visioncpp-static.cmake` + `PATCH_COMMAND`.
-- **SCUNet implementation follows `docs/model-implementation-guide.md`:** arch in `src/visp/arch/scunet.*`, loader + API + CLI entry (`vision-cli scunet`), converter support added to `scripts/convert.py` itself (reuses its Writer; no separate script), per-layer cosine parity against the PyTorch reference via the existing workbench harness (`tests/test_scunet.py`, 10 cases). Skipping parity testing is how bugs hide in ggml ports.
-- **Implementation notes worth keeping:** the fork also fixes a latent `swin.h` mismatch (`window_reverse` declared with `int`, defined with `int64_t`); `scunet_compute` transfers weights to CWHN unconditionally and runs the whole graph CWHN, like BiRefNet's encoder; attention masks are only precomputed for stages that actually contain a second ("SW") block; `scunet_detect_params` accepts any `dim` divisible by `2*head_dim` (lets tiny test configs through) while rejecting garbage.
-- **Verification:** all 10 `tests/test_scunet.py` parity cases pass; `vision-cli scunet` output for the real `scunet_color_real_gan` checkpoint matches the PyTorch reference on a 256×256 image to ≤1 LSB per channel on both CPU and the RX 9070 XT (Vulkan, ~156ms). Two failures pre-existing on the pristine fork (mobile-sam `test_predict_masks`, plus Vulkan-gated primitive tests before the Vulkan build was enabled) are unrelated to SCUNet.
-- **ggml update policy:** the submodule pins Acly's vision patch series (`vision-20260331`) — conv2d_deform, cwhn im2col, f16 repeat — which upstream llama.cpp lacks, so updating means rebasing that series, not fast-forwarding. Don't bump unprompted: upstream gained only LLM-side ops since March 2026 (the one interesting perf item is `vulkan: tiled transpose for 0<->2 permuted CONT`, relevant to visp's CWHN permutes). Bump when Acly publishes a newer `vision-*` tag (then: submodule bump + re-run the parity suite), or if profiling shows ggml-bound bottlenecks. The CPU `conv_transpose_2d_p0` batch>1 inaccuracy exists in current upstream too; it can't affect the app (batch is always 1).
-- No GGUF weights for any denoising model exist that C++ code can consume (`cstr/scunet-GGUF` on HF is weights-only with no public consumer; useful as a provenance cross-check at most). We convert the upstream cszn `.pth` checkpoints to **F16 GGUF** ourselves; the raw `.pth` checkpoints live in `vision.cpp/models/scunet/`.
+**App integration:** a standalone `DenoiseStep` mirroring `UpscaleStep`, with `ModelCategory::Denoise`, a `DenoiseModel` seam, and a `VisionCppDenoiseModel` adapter. RGB-only, preserving an existing alpha channel. Pipeline order is BackgroundRemoval, Bokeh, Denoise, Upscale. Bokeh sits right after background removal so its blur runs at source resolution. Denoising runs before upscaling because upscaling amplifies noise. Large images run full-resolution up to 2.25MP (~1500x1500), then 512px tiles with 32px overlap, feather-blended inside `scunet_compute`. Tile sizes are 64-aligned, which SCUNet requires and which gives edge tiles replicate padding for free.
 
-**Hosting: `~/Documents/Dev/transparent-models/`** holds `scunet-color-real-gan-F16.gguf` and `scunet-color-real-psnr-F16.gguf` (F16, ~36MB each; SHA256s are recorded in `ModelCatalog.cpp`). This folder becomes the Forgejo LFS repo `forge.db-serve.com/dbajan/transparent-models` — one shared repo for all future models (colorization etc.). `transparent`'s `FetchContent_Declare` points at `https://forge.db-serve.com/dbajan/vision.cpp.git` tracking its `main` branch (tag-pinning deliberately deferred; when a fork tag is introduced, set `GIT_TAG` to it for reproducible CI builds).
-
-**App integration (implemented): a standalone `DenoiseStep`**, mirroring `UpscaleStep`:
-
-- New `ModelCategory::Denoise`, `DenoiseModel` seam, and `VisionCppDenoiseModel` adapter. RGB-only denoise that **preserves an existing alpha channel** (so it composes after BackgroundRemoval in Advanced mode).
-- Pipeline order in `main.cpp`: BackgroundRemoval → Bokeh → **Denoise** → Upscale (bokeh directly after background removal keeps its mask-based blur at source resolution; denoise-then-upscale because upscaling amplifies noise). Advanced mode gets it via the reorderable step list automatically; Simple mode gets it in the dropdown; the Simple-mode default stays Background Removal; nothing is auto-enabled. Consequence of the order: bokeh's strength-slider live preview applies only when Bokeh is the last active step (Simple mode, or an Advanced order ending in Bokeh).
-- `ModelCatalog`: two entries (GAN default, PSNR), forge `/media/branch/main/` raw-LFS URLs. The GAN model is also a CMake-time default (auto-provisioned like BiRefNet/Remacri, see "Model management"); the PSNR variant stays download-on-demand.
-- **Large images: full-res inference up to 2.25MP (~1500×1500); above that, 512px tiles with 32px overlap**, feather-blended inside visp's `scunet_compute` (mirroring `esrgan_compute`; visp's own CLI tiles ESRGAN at 224/16 for the same VRAM reason, and the 64px-aligned tile sizes give edge tiles replicate padding for free, which SCUNet's /64 requirement needs anyway). Constants are revisited after testing on the RX 9070 XT — the real constraint is what a 12MP photo does to VRAM.
-
-#### Denoise performance (profiled 2026-09-01, RX 9070 XT / Vulkan)
-
-Measurements at 512x512 input, GPU: full model ~464ms; conv-only skeleton (all
-attention blocks removed) ~50ms; two stage-1 attention blocks add ~62ms (~31ms per
-block); two body-stage blocks are negligible (~45ms total). Conclusion: **window
-attention is ~89% of runtime**, and the full-resolution stage-1 attention (8 blocks:
-m_down1 + m_up1) is more than half of it by itself. Overall utilization is far below
-hardware capability (~1-2% of the 9070 XT's fp16 throughput), so the headroom is real
-but locked inside ggml's Vulkan flash-attention path (n_heads=1, head_dim=32, 64-token
-windows, masked SW variants).
-
-Done during this pass (keep):
-- Converter robustness: config inference tolerates groups with zero blocks and
-  checkpoints without any ConvTransBlock; `scunet_compute` skips attention constants
-  when no attention blocks exist (unused constants can't get backend buffers).
-- (A `ggml_conv_2d_cwhn` patch to the vendored ggml made during this pass was reverted
-  in the second pass — see below; the submodule is back to Acly's `vision-20260331`
-  commit, unmodified.)
-
-Second pass (done, profile-driven):
-
-The "attention is ~89% of runtime" conclusion above was wrong — the skeleton-vs-blocks
-estimate was misleading. A real per-op GPU profile (`GGML_VK_PERF_LOGGER=1`, supported by
-the vendored ggml) at 512x512 on the 464ms baseline showed: IM2COL 200ms, ADD 81ms,
-CONT 44ms, NORM 31ms, all matmuls ~40ms, flash attention ~5ms. The dominant costs were
-memory-bound elementwise ops and the conv im2col expansion, not attention math.
-
-1. **Conv im2col elimination (the big win, 442 -> 289ms).** The copy audit found that
-   *all* 61 convs ran the `ggml_conv_2d` im2col+mul_mat fallback: visp's CWHN
-   presentation is `[C,W,H,N]`, which never satisfies ggml's channels-contiguous check
-   (that wants `[W,H,C,N]` with `nb[2]==type_size`), so the previous session's
-   `ggml_conv_2d_cwhn` branch was dead code on Vulkan (its "~2-4%" claim came
-   from measurement noise). Worse, `ggml_conv_2d_cwhn` can never dispatch on Vulkan at
-   all: `ggml_vk_conv_2d` asserts the input's innermost dim is densely packed
-   (`nb10 == sizeof(float)`), which contradicts channels-dense memory for C>1. The fix
-   in `nn.cpp conv_2d` keeps visp's `[C,W,H,N]` presentation and routes the
-   contiguous-input case through one `cont(permute)` copy per side into
-   `ggml_conv_2d_direct` (W-dense, so the direct Vulkan conv2d shader applies, no
-   im2col tensor). Zero shader changes; CPU keeps its `conv_2d_direct_cwhn` branch.
-   The dead branch and the vendored-ggml patch it needed were removed afterwards, so
-   `depend/llama` is unmodified again; results identical (benchmarks and the ≤1 LSB
-   output check re-verified after the revert).
-2. **LayerNorm affine folding (289 -> 268ms).** `scunet::swin_block` no longer emits
-   LN mul/add: `window_attention` and `mlp` take the pre-norm tokens, run only
-   `ggml_norm` (statistics), and fold γ into the following linear's weight and
-   β·W+b into its bias (`linear_folded_ln`, computed in f32 from the f16 weights at
-   graph-build time, a few KB). The norm commutes with roll and window partition.
-   Also: the attention-mask `ggml_repeat` for n_heads==1 is skipped (it was a
-   same-shape full-tensor copy); `split_qkv` was split into `split_qkv` +
-   `split_qkv_proj` so the folded path can reuse the QKV reshape logic.
-3. **Stage-attention micro-benchmark (flash vs default).** Standalone harness timed
-   `scunet::window_attention` at all four real stage shapes (dim 32/64/128/256,
-   n_heads 1/2/4/8, 512px tile): non-flash was 10-22% faster at n_heads==1, a wash
-   elsewhere; end-to-end flash on/off was within run-to-run noise after the conv fix
-   (289 vs 294ms). Conclusion: no size-conditional flag; flash stays at its backend
-   default. Attention is now ~5ms flash + ~40ms matmul per tile and no longer worth
-   special-casing.
-4. **F16 activations: investigated, blocked, not pursued.** Vulkan has `pipeline_norm_f32`
-   only (no f16 norm), and the conv2d shader is f32-in/f32-out only; the residual
-   elementwise costs (ADD ~75ms, CONT ~42ms, NORM ~32ms after the fixes) are all
-   generic ggml-Vulkan shader throughput (a [32,512,512] add runs at ~0.27 TB/s on the
-   9070 XT). Making these f16 means writing new backend shaders and a compute-dtype
-   seam through `scunet_generate` — foundation work, explicitly not worth it here.
-   Same for eliminating the two permute-copies per conv (needs a channels-dense
-   conv2d shader variant): accepted as-is.
-
-Re-benchmark (final, RX 9070 XT / Vulkan, scunet-color-real-gan): 512x512 442 ->
-~268ms (1.65x); 1024x1024 full-res 916ms; 12MP tiled (4032x3024, 512px tiles) ~9.8s
-(was ~22s, 2.2x). CPU fallback unaffected (512x512 ~1.7s). Correctness: parity suite
-10/10 on CPU, C++ ctest green, optimized GPU/CPU output within 1 LSB per channel of
-the pre-optimization output (which was itself ~0.5/255 vs the PyTorch reference).
-All changes are op-graph level and hardware-neutral (no shader edits, no
-vendor/hardware conditionals). Two suite failures are pre-existing and unrelated:
-mobile-sam `test_predict_masks` (documented above) and `test_birefnet
-::test_swin_transformer`, which is tolerance-flaky against its unseeded random inputs
-(seeded runs show the numerics are bit-identical to the pristine fork; ~30% of seeds
-exceed its atol=0.002 regardless of these changes).
-
-Uncommitted at the time of writing (user commits/pushes): in the vision.cpp fork the
-previous session's converter + compute fixes (convert.py, vision.cpp) plus this
-session's conv-direct fix, LN folding, repeat skip and split_qkv refactor (nn.cpp,
-nn.h, scunet.cpp, scunet.h); `depend/llama` is clean at Acly's `vision-20260331`
-commit, no local patches. In transparent the step reorder (BackgroundRemoval -> Bokeh
--> Denoise -> Upscale) plus this PLAN section.
+**Performance (512x512, RX 9070 XT / Vulkan):** tuned from ~464ms to ~268ms. The current graph runs direct convolutions with no im2col materialization, folds layer-norm affine transforms into the following linear, and uses non-flash attention. Remaining costs are generic elementwise ops. Making them f16 would need new backend shaders, which is not worth it. Details in git history and the tests.
 
 ### Language and UI (C++ and Qt Widgets)
 
@@ -244,57 +113,17 @@ commit, no local patches. In transparent the step reorder (BackgroundRemoval -> 
 
 ### Preview zoom & before/after compare (done)
 
-Goal: inspect results at pixel level and see what the pipeline actually changed. Implemented
-as designed: `PreviewCanvas` (`src/ui/PreviewCanvas.h/.cpp`) is the custom canvas widget that
-absorbed `updatePreview()`'s checkerboard and HiDPI logic, with the wipe and view state on
-top; `MainWindow` wires it to the pipeline results and hosts the compare controls. Geometry
-and wipe rendering are covered by `tests/test_preview_canvas.cpp` (14 cases, including
-grab-based render checks); `test_main_window.cpp` adds an integration test for the
-load-image wiring. No new dependencies, no pipeline core changes; GIF compare remains out of
-scope (below).
+A zoomable preview with a before/after wipe, built as the `PreviewCanvas` widget (`src/ui/PreviewCanvas.h`). Covered by `tests/test_preview_canvas.cpp` (geometry and render checks) and a `MainWindow` integration test. Decisions, which double as the user-facing behavior:
 
-Decisions, recorded so they survive across sessions:
-
-- **"Before" = the original image as loaded; "after" = the final pipeline result.**
-  Intermediate per-step results are not captured anywhere and capturing them would mean
-  touching the pipeline core; not wanted. Stills only — see the GIF decision below.
-- **Wipe slider is the compare presentation, on by default.** A draggable vertical split line
-  over one shared canvas: left of the line shows before, right shows after. A button under the
-  existing ✕ (top-right overlay) toggles it off (after-only, i.e. today's view) and back on.
-  The enabled state persists in QSettings like the bokeh strength; first-ever-launch default
-  is enabled. There is deliberately no A/B hold-key flip — one compare mechanism, done well.
-  `W` toggles the wipe via keyboard, matching the `F`/`1`/`+`/`-` scheme.
-- **One shared view state.** Pan/zoom applies identically to both images (same dimensions for
-  stills), so before and after stay perfectly aligned at any zoom — this is what makes
-  differences visible.
-- **Zoom interactions** (near-universal conventions, all cheap): cursor-anchored wheel zoom
-  (what's under the mouse stays under the mouse), left-drag pan, double-click toggles
-  fit ↔ 100%, `+`/`-` zoom in/out, `F` fit, `1` = 100%. A small semi-transparent overlay strip
-  at the top-left of the preview (mirroring the ✕ at top-right) shows the zoom percentage with
-  fit and 100% buttons.
-- **Rendering: smooth while shrinking to fit, nearest-neighbor at ≥200% magnification.**
-  Smooth upscaling blurs — which hides exactly the pixel differences zoom exists to show.
-  Max zoom 16× (past visual resolution on any display; bounds repaint cost).
-- **Stability across re-renders.** `resultImage_` is rewritten by bokeh slider ticks, model
-  swaps, reprocess runs, and Simple/Advanced mode switches; zoom, pan, divider position, and
-  wipe enabled state must persist through all of them (a reset per bokeh tick would make the
-  live preview unusable). A **new image load** resets everything: fit, wipe on, divider at 50%.
-- **Divider affordance:** clean vertical line with a small grip and a hover cursor change (⇔);
-  wide grab area; dragging it takes priority over pan-drag. It spans the image area only, not
-  the letterbox, and carries no "Before"/"After" text labels (self-explanatory, and unreadable
-  over transparent regions).
-- **Animated GIFs: compare disabled.** Full-resolution per-frame data is streamed and
-  discarded (only downscaled preview frames survive), so frame-synced before/after would need
-  new plumbing; zoom still works on preview frames. The wipe toggle button renders disabled
-  with a tooltip ("Compare is not available for animations") — hidden controls would flicker
-  as files are swapped.
-- **Batch runs show no compare UI.**
-- **While a still is processing** (result not ready yet), both wipe halves show the source
-  with the spinner on top as today; the wipe becomes meaningful when the result arrives.
-- **Implementation notes:** the canvas becomes a custom QWidget whose `paintEvent` absorbs
-  `updatePreview()`'s checkerboard + DPR logic; the existing overlay reposition mechanism
-  (✕, spinner) extends to the new strip and divider. Export, batch runner, and GIF encoding
-  are untouched.
+- "Before" is the original image as loaded, "after" is the final pipeline result. Intermediate per-step results are not captured.
+- The wipe slider is the compare presentation, on by default for stills. A button under the close button toggles it, `W` toggles it from the keyboard, and the enabled state persists in QSettings. There is no A/B hold-key flip; one compare mechanism.
+- Pan and zoom are shared between both images, so they stay aligned at any zoom.
+- Cursor-anchored wheel zoom, left-drag pan, double-click toggles fit and 100%, `+`/`-` zoom, `F` fits, `1` is 100%. A small overlay strip at the top-left shows the zoom percentage with fit and 1:1 buttons. The strip paints a dark scrim with white text so it stays readable over any image.
+- Rendering is smooth while shrinking and nearest-neighbor at 200% magnification and up. Smooth upscaling hides the pixel differences zoom exists to show. Max zoom is 16x.
+- View state survives re-renders (bokeh slider ticks, model swaps, mode switches). A new image load resets to fit, wipe on, divider at 50%.
+- The divider is a clean vertical line with a grip and a hover cursor, spanning the image area only.
+- Animated GIFs get zoom but not compare (full-resolution per-frame data is streamed and discarded). The wipe button renders disabled with a tooltip. Batch runs show no compare UI.
+- While a still is processing, both wipe halves show the source until the result arrives.
 
 ### Internal architecture (pipeline steps from day one)
 
@@ -302,84 +131,11 @@ The MVP is built as swappable pipeline steps (image in, image out) rather than a
 
 `BackgroundRemovalStep` never talks to vision.cpp directly, only to a `SegmentationModel` interface (`isReady()` / `computeMask()`). `NcnnSegmentationModel` was the first adapter and `VisionCppSegmentationModel` replaced it without touching `BackgroundRemovalStep`. `UpscaleModel` mirrors the same seam for Real-ESRGAN.
 
-### Windows port (MinGW-w64 cross-compilation from the Linux CI runner)
+### Windows port
 
-Researched and decided ahead of starting the port. The work itself is still gated behind Linux distro packages (see deferred list).
+Shipped: a native MSVC build, exercised by CI on every change. The `windows` CMake preset uses vcpkg's `x64-windows-static-md` triplet (static giflib, dynamic CRT to match the prebuilt Qt binaries), the Vulkan SDK provides `glslc` for the shader build, and a portable folder comes from `windeployqt` plus a manual copy of the Vulkan loader. No installer yet.
 
-**Decision. Cross-compile Windows binaries from the same Linux box that hosts Forgejo and its Actions runner, using mingw-w64, rather than standing up a native Windows CI runner.** There is no second machine for a native runner, and Forgejo's official `act_runner` is Linux-only. Its unofficial Windows build is alpha-quality and "should not be considered secure enough to deploy in production". Cross-compiling reuses infrastructure that already exists and is trusted.
-
-**Toolchain**:
-
-- **mingw-w64** (`gcc-mingw-w64-x86-64`/`g++-mingw-w64-x86-64`) targeting `x86_64-w64-mingw32`, for the app's code and for cross-compiling vision.cpp/ggml.
-- **vcpkg's community `x64-mingw-dynamic` triplet** (chainloaded via `VCPKG_CHAINLOAD_TOOLCHAIN_FILE`) for `giflib` and `vulkan`/`vulkan-headers`. Not covered by vcpkg's own CI, but these are small portable C libraries with a long history of building under MinGW.
-- **Qt6 via `aqtinstall`**, not from source. It fetches Qt's official prebuilt Windows MinGW 64-bit binaries on any host OS, which removes the single biggest from-source risk.
-- **`glslc` is not cross-compile-sensitive.** It compiles GLSL to target-agnostic SPIR-V as a host build step, and ggml's CMake already builds its `vulkan-shaders-gen` tool for the host when `CMAKE_CROSSCOMPILING` is set. A native Linux `glslc` install covers this.
-
-**Open unknowns, to resolve with a manual local spike before any CI**: whether vision.cpp's own `CMakeLists.txt` cooperates with `CMAKE_CROSSCOMPILING`, whether vcpkg's mingw triplet builds `giflib` and the Vulkan loader, and how to package the result (`windeployqt.exe` is a Windows PE tool and will not run natively on the Linux build host. Run it under Wine, or hardcode the app's fixed Qt DLL list as a CMake install step). Expect a day or two of focused work, not open-ended research.
-
-**Steps, in order**:
-
-1. Do the cross-compile by hand on the homelab box first, outside CI, to resolve the unknowns above.
-2. Capture the working toolchain in a Dockerfile (below) and build a purpose-built CI image.
-3. Push the image to Forgejo's built-in container registry as `forgejo.yourdomain/you/ci-windows-cross:v1`.
-4. Add a `.forgejo/workflows/windows-cross-build.yaml` job with `runs-on: docker`, wired to the persistent caching below.
-5. Only then consider an installer. The stated goal is a portable single `.exe` (windeployqt or manual DLL list, zipped) to start.
-
-**Dockerfile for the CI image**:
-
-```dockerfile
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates \
-    cmake ninja-build \
-    gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
-    ccache \
-    python3 python3-pip \
-    glslc \
-    && pip install --no-cache-dir --break-system-packages aqtinstall \
-    && rm -rf /var/lib/apt/lists/*
-```
-
-(`glslc` here is the Linux-native shader compiler, used as a host tool during the build. A native Vulkan SDK/loader is not needed for the cross-compiled Windows binary itself.)
-
-**Persistent caching**, so CI does not recompile vision.cpp/ggml and vcpkg's deps from scratch every run:
-
-1. Create two named Docker volumes on the DinD daemon: `ci-ccache` and `ci-vcpkg-cache`. Named volumes avoid the UID/permission mismatches raw bind-mounts commonly hit. Their persistence depends on the DinD container's own `/var/lib/docker` being durable, worth confirming.
-2. Allow-list both in the runner's `config.yaml` and restart the runner:
-   ```yaml
-   container:
-     valid_volumes:
-       - ci-ccache
-       - ci-vcpkg-cache
-   ```
-3. Reference them in the workflow job:
-   ```yaml
-   jobs:
-     windows-cross-build:
-       runs-on: docker
-       container:
-         image: forgejo.yourdomain/you/ci-windows-cross:v1
-         volumes:
-           - ci-ccache:/ccache
-           - ci-vcpkg-cache:/vcpkg-cache
-       env:
-         CCACHE_DIR: /ccache
-         CCACHE_MAXSIZE: 5G
-         VCPKG_BINARY_SOURCES: "clear;files,/vcpkg-cache,readwrite"
-       steps:
-         - uses: actions/checkout@v4
-           with:
-             submodules: recursive
-         - name: Configure
-           run: |
-             cmake --preset default \
-               -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-               -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-         - name: Build
-           run: cmake --build build
-   ```
-   `ccache` evicts on its own once `CCACHE_MAXSIZE` is hit. vcpkg's `files` backend does not auto-evict, but with only three small deps that is not a practical concern yet.
+If Windows packaging should ever run on the Linux CI runner instead of a Windows machine, the decided approach is cross-compilation with mingw-w64 and vcpkg's community `x64-mingw-dynamic` triplet, Qt via `aqtinstall`, and a Linux `glslc` (it compiles target-agnostic SPIR-V as a host step). Open questions from the earlier research: whether vision.cpp's CMake cooperates with `CMAKE_CROSSCOMPILING`, whether that triplet builds giflib and the Vulkan loader, and how to package without a native `windeployqt` (run it under Wine, or hardcode the Qt DLL list). The goal is a portable zipped `.exe`. A purpose-built CI image (Debian plus mingw-w64, aqtinstall, and glslc, with ccache and vcpkg-cache volumes allow-listed in the runner config) would come first. None of this work has started.
 
 ## v1 (MVP) scope (Linux only)
 
@@ -397,8 +153,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 4. ~~Video / GIF support~~ **GIF done, video still deferred.** `GifIO` (`src/core/GifIO.h`) reads animated GIF frames via Qt's decoder, runs each through the same `Pipeline`, and re-encodes via giflib. True video needs FFmpeg or similar.
 5. ~~Model swappability~~ **Done.** See model management above.
 6. Linux distro-native packages (deb/rpm) alongside the AppImage.
-7. Windows port (portable single .exe first, installer only if a real need shows up). Approach decided: MinGW-w64 cross-compilation from the Linux Forgejo runner.
+7. ~~Windows port~~ **Native MSVC build done**, including a portable folder via `windeployqt`. Remaining: an installer only if a real need shows up, and optionally the MinGW cross-build so the Linux runner can package Windows binaries.
 8. macOS port, contingent on tester access.
+
+Also done since the list above was written: SCUNet denoising, the zoom and before/after wipe preview, and custom user-imported models. See the sections above.
 
 **Contingent, not on the list above**: colorizing black-and-white photos. Candidate model is DDColor (Apache-2.0), tentative. No GGUF weights exist for any permissively-licensed colorization model, so this needs a from-scratch PyTorch-to-GGUF conversion and a feasibility spike before it gets a firm slot.
 

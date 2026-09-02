@@ -58,11 +58,10 @@ public:
     std::vector<ScannedModel> scanModels() const;
 
     // Copies a user-provided .gguf into the models directory after checking
-    // that its architecture is one this app can load. The directory scan
-    // then routes it to its category automatically. Fails with a message
-    // when the architecture is unrecognized, the file is unreadable, or a
-    // file of the same name already exists. Returns true and copies on
-    // success.
+    // that its architecture is one this app can load; the directory scan
+    // routes it to its category. On failure returns false and fills
+    // `errorMessage` (unrecognized architecture, unreadable file, or name
+    // collision).
     bool importModel(const QString& sourcePath, QString* errorMessage = nullptr);
 
     // Async download into modelsDir(), verified against info.sha256. No-op

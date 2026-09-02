@@ -1,39 +1,45 @@
 # transparent
 
-Local, GPU-accelerated background removal. Linux-first, with a working native Windows build. No cloud calls, no subscriptions, no telemetry.
+Local, GPU-accelerated image editing. Background removal, denoising, upscaling, and bokeh blur, all in one app. Linux first, with a working native Windows build. No cloud calls, no subscriptions, no telemetry.
 
-## Status
+## Capabilities
 
-Linux MVP in progress. Background removal, 4x upscaling, and a mask-only bokeh blur all work end to end. Drag an image in for one processed PNG out. Drag a folder in and pick an output folder to batch every supported image in it. Drag an animated GIF in to run every frame through the pipeline and export a new GIF. Simple mode runs one operation at a time. Advanced mode runs several in any order. Inference runs via [vision.cpp](https://github.com/Acly/vision.cpp) (BiRefNet-lite and Real-ESRGAN) with Vulkan GPU acceleration and a CPU fallback. Bokeh reuses BiRefNet-lite's own mask, no separate model. GIF decoding uses Qt's own plugin. Encoding uses [giflib](http://giflib.sourceforge.net/) (MIT) plus a small built-in color quantizer. See [PLAN.md](PLAN.md) for full scope, architecture decisions, and the roadmap (true video support, full depth-graduated blur, colorization, CI and packaging for Windows, macOS port).
+Everything below works end to end and is covered by CI.
 
-## Why
+- Vulkan GPU acceleration with CPU fallback
+- Background removal via BiRefNet-lite
+- Denoising via SCUNet
+- 4x upscaling via Real-ESRGAN
+- Bokeh blur with an adjustable strength slider
+- A zoomable preview with a before/after comparison
+- Model management in the settings tab, including user-imported models from disk
+- Simple mode for one operation at a time
+- Advanced mode for running several in any order
+- Single images, batch folders, and animated GIF in and out
 
-Existing local background-removal tools are bad on Linux. They have broken or absent GPU acceleration, they fit the desktop poorly, and they nag for subscriptions. This started as a local-first, offline alternative built to work well on Linux first. It is growing into a broader toolkit for image edits that usually cost a subscription or are done poorly by existing local tools. See [PLAN.md](PLAN.md) for the rest of the reasoning.
+Inference runs via [vision.cpp](https://github.com/Acly/vision.cpp), built from [this fork](https://forge.db-serve.com/dbajan/vision.cpp) which adds the SCUNet architecture. GIF encoding uses [giflib](http://giflib.sourceforge.net/) plus a small built-in color quantizer.
 
 ## Building
 
-Prerequisites (all platforms):
+Prerequisites:
 
-- CMake 3.28+, Ninja
-- A C++20 compiler
-- Qt6 base package (Widgets, Network, Concurrent, and Test all ship in qtbase)
-- git (this repo uses a submodule)
+- Git
+- CMake 3.28+
+- Ninja
+- C++20 compiler
+- Qt6 base
 
-vcpkg is vendored as a git submodule and supplies the Vulkan headers/loader and giflib. CMake's `FetchContent` fetches [vision.cpp](https://github.com/Acly/vision.cpp) and its ggml backend from source, pinned to a tagged release. The `default` preset covers Linux and macOS; a separate `windows` preset picks the right vcpkg triplet. The first configure takes a while. It bootstraps vcpkg, compiles vision.cpp/ggml including Vulkan shader compilation, and downloads checksum-verified model weights. Later builds are incremental.
-
-Everything is linked statically except Qt and the Vulkan loader. vision.cpp's headers mark its API with `__declspec(dllimport)` on MSVC unless `VISP_STATIC_DEFINE` is defined, which upstream does not support, so on Windows a small local patch ([cmake/patch-visioncpp-static.cmake](cmake/patch-visioncpp-static.cmake), wired in via `FetchContent`'s `PATCH_COMMAND`) adds that convention, and a top-level `add_compile_definitions(VISP_STATIC_DEFINE)` applies it to both sides of the link. Without it, linking fails with `LNK2019` on `__imp_...` symbols. The `windows` preset also uses vcpkg's `x64-windows-static-md` triplet, which builds giflib (and everything else vcpkg provides) as static libraries while keeping the dynamic C runtime that the prebuilt Qt binaries require; the plain `x64-windows-static` triplet would force `/MT` and clash with Qt's `/MD`.
+vcpkg is vendored as a git submodule and supplies the other necessary libraries.
 
 ### Linux
 
-Install the system dependencies. The vcpkg submodule supplies the Vulkan headers/loader and giflib, but ggml's Vulkan shaders need a system `glslc` (the `shaderc`/`glslc` package below).
+1. Install the system dependencies:
 
-Debian/Ubuntu:
+Debian/Ubuntu (Debian 13 and Ubuntu 24.04 or newer):
 
 ```bash
 sudo apt install build-essential cmake ninja-build git qt6-base-dev shaderc
 ```
-
-CMake must be 3.28+. Debian 13 and Ubuntu 24.04 or newer qualify. On older releases install a newer CMake (`pip install cmake` or the Kitware apt repo).
 
 Fedora:
 
@@ -47,105 +53,117 @@ Arch:
 sudo pacman -S --needed base-devel cmake ninja git qt6-base shaderc
 ```
 
-Clone and fetch the vendored vcpkg submodule:
+2. Clone the repository:
 
 ```bash
-git clone <this-repo-url>
+git clone https://forge.db-serve.com/dbajan/transparent.git
 cd transparent
 git submodule update --init
 ```
 
-Configure and build:
+3. Configure and build:
 
 ```bash
 cmake --preset default
 cmake --build build
 ```
 
-Run the tests:
+4. Run the tests:
 
 ```bash
 ctest --test-dir build
 ```
 
-Run the app:
+5. Run the app:
 
 ```bash
 ./build/transparent
 ```
 
-### Windows
-
-The native MSVC route works and is exercised with every change. PLAN.md still plans a MinGW-w64 cross-build from the Linux CI runner for packaging; that work has not started.
-
-1. **Visual Studio 2022** with the *Desktop development with C++* workload. CMake and Ninja ship with VS.
-
-2. **Git for Windows**, with long paths enabled. The vcpkg and vision.cpp source trees exceed the default `MAX_PATH` limit.
-
-   ```bat
-   git config --global core.longpaths true
-   reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1
-   ```
-
-   Clone somewhere short, e.g. `C:\Dev\transparent`:
-
-   ```bat
-   git clone https://forge.db-serve.com/dbajan/transparent.git C:\Dev\transparent
-   cd C:\Dev\transparent
-   git submodule update --init
-   ```
-
-3. **Qt 6.8+ for MSVC 2022 64-bit**, from the Qt online installer (pick the `MSVC 2022 64-bit` component, not the MinGW one) or with aqtinstall:
-
-   ```bat
-   uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O C:\Qt
-   ```
-
-4. **Vulkan SDK** from [LunarG](https://vulkan.lunarg.com/sdk/home). Its `glslc` compiles ggml's Vulkan shaders. vcpkg already supplies the loader and headers.
-
-5. Open an **"x64 Native Tools Command Prompt for VS 2022"** so `cl.exe` and Ninja are found. Put Qt's bin directory on `PATH` and build:
-
-   ```bat
-   set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%PATH%
-   cmake --preset windows
-   cmake --build build
-   ```
-
-   Adjust the Qt path to the version you installed. The `windows` preset sets the `x64-windows-static-md` vcpkg triplet, so giflib is linked statically and only the Vulkan loader ends up as a runtime DLL. vcpkg copies `vulkan-1.dll` next to the executables automatically.
-
-6. Run the tests, then the app:
-
-   ```bat
-   ctest --test-dir build
-   build\transparent.exe
-   ```
-
-   The exe needs the Qt DLLs on `PATH` to start, which step 5's `set PATH` provides. For a self-contained folder:
-
-   ```bat
-   mkdir portable\bin
-   copy build\transparent.exe portable\bin\
-   C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe --release --compiler-runtime portable\bin\transparent.exe
-   copy build\vulkan-1.dll portable\bin\
-   xcopy /E /I build\models portable\share\transparent\models\
-   ```
-
-   `windeployqt` pulls in the Qt DLLs, the MSVC runtime, and the platform and image-format plugins; the explicit copy adds the Vulkan loader. giflib is static, so there is no `gif.dll` to ship. The app finds models in `..\share\transparent\models` relative to the exe. There is no installer yet (see PLAN.md).
-
-## Packaging
-
-Build a portable AppImage. The script needs a Qt6 `qmake`/`qmake6` on `PATH` and downloads linuxdeploy plus its Qt plugin into `packaging/tools/` on first run:
+6. Package into an AppImage:
 
 ```bash
-packaging/build-appimage.sh
+./packaging/build-appimage.sh
 ```
 
-The AppImage is written to `build/transparent-x86_64.AppImage`.
+### Windows
+
+The native MSVC route works and is exercised with every change.
+
+1. Install system dependencies
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.Windows11SDK.26100"
+winget install -e --id Git.Git
+winget install -e --id Kitware.CMake
+winget install -e --id Ninja-build.Ninja
+winget install -e --id KhronosGroup.VulkanSDK
+uvx --from aqtinstall aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O C:\Qt
+```
+
+2. Enable long paths on Git. The vcpkg and vision.cpp source trees exceed the default `MAX_PATH` limit.
+
+```powershell
+git config --global core.longpaths true
+sudo reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1
+```
+
+3. Clone the repository:
+
+```powershell
+git clone https://forge.db-serve.com/dbajan/transparent.git C:\Documents\Dev\transparent
+cd C:\Documents\Dev\transparent
+git submodule update --init
+```
+
+4. Build the app using `cl.exe`.
+
+```powershell
+set PATH=C:\Qt\6.8.3\msvc2022_64\bin;%PATH%
+cmake --preset windows
+cmake --build build
+```
+
+5. Run the tests:
+
+```powershell
+ctest --test-dir build
+```
+
+6. Run the app:
+
+```powershell
+.\build\transparent.exe
+```
+
+7. Make a portable version:
+
+```powershell
+mkdir portable\bin
+copy build\transparent.exe portable\bin\
+C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe --release --compiler-runtime portable\bin\transparent.exe
+copy build\vulkan-1.dll portable\bin\
+xcopy /E /I build\models portable\share\transparent\models\
+```
 
 ## Models
 
-Background removal uses [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) (MIT), converted to GGUF by [Acly](https://huggingface.co/Acly/BiRefNet-GGUF) for vision.cpp. Upscaling uses the `foolhardy_Remacri` [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) checkpoint (BSD-3-Clause), converted to GGUF by [Acly](https://huggingface.co/Acly/Real-ESRGAN-GGUF) too. Weights are not committed to this repo. [models/CMakeLists.txt](models/CMakeLists.txt) downloads and checksum-verifies them at configure time.
+Three defaults are downloaded and checksum-verified at configure time, and copied into the app's data directory on first launch, so a fresh install works offline:
+
+| Category | Model | License | Source |
+|---|---|---|---|
+| Background removal | [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) | MIT | [Acly/BiRefNet-GGUF](https://huggingface.co/Acly/BiRefNet-GGUF) |
+| Denoise | [SCUNet](https://github.com/cszn/SCUNet) color real GAN | Apache-2.0 | [transparent-models](https://forge.db-serve.com/dbajan/transparent-models) |
+| Upscale | Real-ESRGAN `foolhardy_Remacri` | BSD-3-Clause | [Acly/Real-ESRGAN-GGUF](https://huggingface.co/Acly/Real-ESRGAN-GGUF) |
+
+More models are available to available to install in the settings tab. Custom converted models can be added using the `Add model from disk` button or from being added into the models folder. Only `birefnet`, `scunet`, and `esrgan` as currently supported.
+
+To convert your own checkpoints for a supported architecture, use [scripts/convert.py](https://forge.db-serve.com/dbajan/vision.cpp/blob/main/scripts/convert.py) in the vision.cpp fork. It supports the same architectures and produces F16 GGUF files, for example:
+
+```bash
+uv run python scripts/convert.py esrgan 4x-UltraSharp.pth -q f16 -o models/
+```
 
 ## License
 
-This project's own code is [GPLv3](LICENSE). See [PLAN.md](PLAN.md#project-intent) for why, over LGPLv3 or GPLv2. Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, Real-ESRGAN, giflib) keep their own licenses. See PLAN.md for the full list.
+This project's own code is [GPLv3](LICENSE). Bundled third-party components (Qt, vision.cpp/ggml, BiRefNet-lite, SCUNet, Real-ESRGAN, giflib) keep their own licenses.

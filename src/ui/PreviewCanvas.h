@@ -3,15 +3,14 @@
 #include <QFrame>
 
 // The image preview canvas: checkerboard backdrop, zoom/pan, and the
-// before/after wipe. Replaces the old QLabel-with-QPixmap preview so the
-// result can be inspected at pixel level and compared against the source.
+// before/after wipe.
 //
 // View model: `zoom_` is screen pixels per image pixel (1.0 = 100%) and
 // `pan_` is the image coordinate (in after-image pixels) at the center of
-// the viewport. Fit mode keeps the image shrunk to fit and centered; any
-// zoom interaction switches to Free mode. Both images are drawn into the
-// same display rect, so the wipe stays aligned even when an upscale step
-// makes the result larger than the source.
+// the viewport. Fit mode shrinks the image to fit and centers it; any zoom
+// interaction switches to Free mode. Both images are drawn into the same
+// display rect, so the wipe stays aligned even when an upscale step makes
+// the result larger than the source.
 class PreviewCanvas : public QFrame {
     Q_OBJECT
 
@@ -33,7 +32,7 @@ public:
     void setCompareAllowed(bool allowed);
     bool isCompareAllowed() const { return compareAllowed_; }
     // Both images present (and compare allowed). A mismatched pixel size is
-    // fine — both draw into the same display rect.
+    // fine, both draw into the same display rect.
     bool isCompareAvailable() const;
 
     void setWipeEnabled(bool enabled);

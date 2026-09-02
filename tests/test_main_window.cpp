@@ -55,20 +55,10 @@ void TestMainWindow::constructionLeavesDefaultStepEnabledDespiteAdvancedPagePopu
 
     MainWindow window(pipeline);
 
-    // Regression test: building the Advanced-mode step list used to fire
-    // QListWidget::itemChanged reentrantly during population: each of
-    // QListWidgetItem's own construction/setData/setFlags calls emits it at
-    // least once, always reporting the item's not-yet-set default
-    // Qt::Unchecked state, before setCheckState() ever runs. Left
-    // unblocked, the itemChanged handler wrote that transient Unchecked
-    // back into Pipeline, silently disabling Background Removal (the step
-    // MainWindow's constructor had just enabled as Simple mode's default),
-    // and by the time setCheckState() itself ran, isStepEnabled() already
-    // read back that corrupted false and "confirmed" Unchecked instead of
-    // overwriting it, so nothing ever restored the correct state. In
-    // practice this meant the very first image dropped after launch always
-    // passed through unprocessed. See populateAdvancedStepList()'s
-    // QSignalBlocker for the fix.
+    // Regression test: populateAdvancedStepList() once let
+    // QListWidget::itemChanged fire during construction, which wrote the
+    // items' transient Unchecked state back into Pipeline and silently
+    // disabled Background Removal. The builder blocks that signal.
     QVERIFY(pipeline->isStepEnabled(0));
     QVERIFY(!pipeline->isStepEnabled(1));
 }
