@@ -61,9 +61,9 @@ Adjustable upscale *amount* (as opposed to model choice) was considered and reje
 Design:
 
 - Curated registry, not free-form file browsing. The selection screen knows a fixed list per category (name, filename, license, size, download URL, SHA256), scans the models directory, and marks each entry Installed or Not Installed by filename match. Browsing for an arbitrary `.gguf` is deferred, since vision.cpp's loaders are architecture-specific and would fail on an incompatible file anyway.
-- On-demand download, not bundled at build time. Each entry has its own download button, runs off the GUI thread, and is verified against its known SHA256 before being marked Installed. A mismatch deletes the file and shows an error. Manually placing a file in the models directory works the same way.
+- On-demand download for everything beyond the defaults. Each entry has its own download button, runs off the GUI thread, and is verified against its known SHA256 before being marked Installed. A mismatch deletes the file and shows an error. Manually placing a file in the models directory works the same way.
 - Models live in `QStandardPaths::AppDataLocation`, off the build tree. The build-tree path is wiped by clean rebuilds and is no place for manual placement.
-- First run still needs no network access. The two defaults are fetched at CMake configure time as before, and the app copies them into AppData on first launch if missing.
+- First run still needs no network access. The three defaults (BiRefNet-lite, Remacri, and SCUNet real GAN) are fetched at CMake configure time, and the app copies them into AppData on first launch if missing.
 - Selecting a model applies live, no restart. The steps take their model through a swappable `shared_ptr`, and loading a new model runs asynchronously with a spinner using the same `QtConcurrent`/`QFutureWatcher` pattern `MainWindow` already uses.
 - It lives in a Settings dialog opened from a menu-bar action next to Help, not in the Simple/Advanced mode selector. Model choice and bokeh strength are set-occasionally-then-forget preferences, and nesting them in Advanced mode would lock Simple-mode users out of picking BiRefNet-dynamic for a large photo.
 - Persisted via `QSettings`.
@@ -93,7 +93,7 @@ Fork specifics (implemented in the `vision.cpp` working copy):
 
 - New `ModelCategory::Denoise`, `DenoiseModel` seam, and `VisionCppDenoiseModel` adapter. RGB-only denoise that **preserves an existing alpha channel** (so it composes after BackgroundRemoval in Advanced mode).
 - Pipeline order in `main.cpp`: BackgroundRemoval → Bokeh → **Denoise** → Upscale (bokeh directly after background removal keeps its mask-based blur at source resolution; denoise-then-upscale because upscaling amplifies noise). Advanced mode gets it via the reorderable step list automatically; Simple mode gets it in the dropdown; the Simple-mode default stays Background Removal; nothing is auto-enabled. Consequence of the order: bokeh's strength-slider live preview applies only when Bokeh is the last active step (Simple mode, or an Advanced order ending in Bokeh).
-- `ModelCatalog`: two entries (GAN default, PSNR), on-demand download with SHA256 verification through the existing `ModelManager` flow, not bundled, forge `/media/branch/main/` raw-LFS URLs.
+- `ModelCatalog`: two entries (GAN default, PSNR), forge `/media/branch/main/` raw-LFS URLs. The GAN model is also a CMake-time default (auto-provisioned like BiRefNet/Remacri, see "Model management"); the PSNR variant stays download-on-demand.
 - **Large images: full-res inference up to 2.25MP (~1500×1500); above that, 512px tiles with 32px overlap**, feather-blended inside visp's `scunet_compute` (mirroring `esrgan_compute`; visp's own CLI tiles ESRGAN at 224/16 for the same VRAM reason, and the 64px-aligned tile sizes give edge tiles replicate padding for free, which SCUNet's /64 requirement needs anyway). Constants are revisited after testing on the RX 9070 XT — the real constraint is what a 12MP photo does to VRAM.
 
 #### Denoise performance (profiled 2026-09-01, RX 9070 XT / Vulkan)

@@ -36,7 +36,8 @@ void ModelManager::ensureDefaultsProvisioned() {
     if (buildDefaultsDir_.isEmpty()) {
         return;
     }
-    for (ModelCategory category : {ModelCategory::Segmentation, ModelCategory::Upscale}) {
+    for (ModelCategory category :
+         {ModelCategory::Segmentation, ModelCategory::Denoise, ModelCategory::Upscale}) {
         const QString filename = ModelCatalog::defaultFilename(category);
         if (isInstalled(filename)) {
             continue;

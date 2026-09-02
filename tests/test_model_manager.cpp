@@ -96,7 +96,8 @@ void TestModelManager::ensureDefaultsProvisionedCopiesFromBuildDir() {
     QTemporaryDir buildDir;
     QVERIFY(buildDir.isValid());
 
-    for (ModelCategory category : {ModelCategory::Segmentation, ModelCategory::Upscale}) {
+    for (ModelCategory category :
+         {ModelCategory::Segmentation, ModelCategory::Denoise, ModelCategory::Upscale}) {
         QFile file(buildDir.filePath(ModelCatalog::defaultFilename(category)));
         QVERIFY(file.open(QIODevice::WriteOnly));
         file.write("fake weights");
@@ -104,11 +105,13 @@ void TestModelManager::ensureDefaultsProvisionedCopiesFromBuildDir() {
 
     ModelManager manager(buildDir.path());
     QVERIFY(!manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Segmentation)));
+    QVERIFY(!manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Denoise)));
     QVERIFY(!manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Upscale)));
 
     manager.ensureDefaultsProvisioned();
 
     QVERIFY(manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Segmentation)));
+    QVERIFY(manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Denoise)));
     QVERIFY(manager.isInstalled(ModelCatalog::defaultFilename(ModelCategory::Upscale)));
 }
 
