@@ -5,6 +5,8 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include <optional>
+
 class TestModelCatalog : public QObject {
     Q_OBJECT
 
@@ -15,6 +17,7 @@ private slots:
     void modelsForCategoryOnlyReturnsThatCategory();
     void findByFilenameFindsKnownAndRejectsUnknown();
     void defaultsAreInTheCatalog();
+    void architectureMappingCoversSeamsAndRecognizedArches();
 };
 
 void TestModelCatalog::everyEntryHasRequiredFields() {
@@ -37,6 +40,35 @@ void TestModelCatalog::filenamesAreUnique() {
         QVERIFY(!seen.contains(info.filename));
         seen.insert(info.filename);
     }
+}
+
+void TestModelCatalog::architectureMappingCoversSeamsAndRecognizedArches() {
+    // Only arches with a loading seam in this app map to a category.
+    QCOMPARE(ModelCatalog::categoryForArchitecture(QStringLiteral("birefnet")),
+             std::optional<ModelCategory>(ModelCategory::Segmentation));
+    QCOMPARE(ModelCatalog::categoryForArchitecture(QStringLiteral("scunet")),
+             std::optional<ModelCategory>(ModelCategory::Denoise));
+    QCOMPARE(ModelCatalog::categoryForArchitecture(QStringLiteral("esrgan")),
+             std::optional<ModelCategory>(ModelCategory::Upscale));
+
+    // Known to vision.cpp but without a seam here: recognized, no category.
+    for (const QString& arch : {QStringLiteral("migan"), QStringLiteral("depthanything"),
+                                QStringLiteral("mobile-sam")}) {
+        QCOMPARE(ModelCatalog::categoryForArchitecture(arch), std::optional<ModelCategory>());
+        QVERIFY(ModelCatalog::isRecognizedArchitecture(arch));
+    }
+    QCOMPARE(ModelCatalog::categoryForArchitecture(QStringLiteral("rmbg")),
+             std::optional<ModelCategory>());
+    QVERIFY(!ModelCatalog::isRecognizedArchitecture(QStringLiteral("rmbg")));
+    QVERIFY(!ModelCatalog::isRecognizedArchitecture(QStringLiteral("")));
+
+    // Reverse lookup: every seamed category names the arch that maps to it.
+    QCOMPARE(ModelCatalog::architectureForCategory(ModelCategory::Segmentation),
+             QStringLiteral("birefnet"));
+    QCOMPARE(ModelCatalog::architectureForCategory(ModelCategory::Denoise),
+             QStringLiteral("scunet"));
+    QCOMPARE(ModelCatalog::architectureForCategory(ModelCategory::Upscale),
+             QStringLiteral("esrgan"));
 }
 
 void TestModelCatalog::checksumsLookLikeSha256() {

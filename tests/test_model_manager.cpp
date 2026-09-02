@@ -1,5 +1,6 @@
 #include <QtTest>
 
+#include "TestGguf.h"
 #include "core/ModelCatalog.h"
 #include "core/ModelManager.h"
 
@@ -8,6 +9,8 @@
 #include <QFile>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+
+#include <algorithm>
 
 // Only the synchronous, network-free surface (paths, install detection,
 // checksum verification, default provisioning) is covered here;
@@ -27,6 +30,10 @@ private slots:
     void ensureDefaultsProvisionedCopiesFromBuildDir();
     void ensureDefaultsProvisionedSkipsAlreadyInstalled();
     void ensureDefaultsProvisionedIsNoOpWithEmptyBuildDir();
+    void scanModelsClassifiesCustomGgufsByArchitecture();
+    void scanModelsSkipsCatalogEntriesAndUnreadableFiles();
+    void importModelCopiesValidFilesIntoTheModelsDir();
+    void importModelRejectsUnrecognizedArchAndCollisions();
 };
 
 void TestModelManager::initTestCase() {
@@ -137,6 +144,145 @@ void TestModelManager::ensureDefaultsProvisionedSkipsAlreadyInstalled() {
     QFile stillThere(manager.pathFor(filename));
     QVERIFY(stillThere.open(QIODevice::ReadOnly));
     QCOMPARE(stillThere.readAll(), QByteArrayLiteral("already here, not the build-dir copy"));
+}
+
+void TestModelManager::scanModelsClassifiesCustomGgufsByArchitecture() {
+    ModelManager manager{QString()};
+    QVERIFY(TestGguf::writeTestGguf(manager.pathFor(QStringLiteral("my-birefnet.gguf")),
+                                    QStringLiteral("birefnet")));
+    QVERIFY(TestGguf::writeTestGguf(manager.pathFor(QStringLiteral("my-scunet.gguf")),
+                                    QStringLiteral("scunet")));
+    QVERIFY(TestGguf::writeTestGguf(manager.pathFor(QStringLiteral("my-esrgan.gguf")),
+                                    QStringLiteral("esrgan")));
+    // Known to vision.cpp but without a loading seam in this app.
+    QVERIFY(TestGguf::writeTestGguf(manager.pathFor(QStringLiteral("my-migan.gguf")),
+                                    QStringLiteral("migan")));
+    // Unrecognized architecture.
+    QVERIFY(TestGguf::writeTestGguf(manager.pathFor(QStringLiteral("rmbg-1.4.gguf")),
+                                    QStringLiteral("rmbg")));
+
+    const std::vector<ScannedModel> scanned = manager.scanModels();
+    QCOMPARE(static_cast<int>(scanned.size()), 5);
+
+    std::vector<const ScannedModel*> byName;
+    for (const auto& model : scanned) {
+        byName.push_back(&model);
+        // Sorted by filename; display name is the filename; license is
+        // explicitly unverified.
+        QCOMPARE(model.info.displayName, model.info.filename);
+        QCOMPARE(model.info.license, QStringLiteral("user-provided (license not verified)"));
+    }
+    QVERIFY(std::is_sorted(byName.begin(), byName.end(),
+                           [](const auto* a, const auto* b) {
+                               return a->info.filename < b->info.filename;
+                           }));
+
+    auto find = [&byName](const char* name) {
+        auto it = std::find_if(byName.begin(), byName.end(), [name](const auto* model) {
+            return model->info.filename == QLatin1String(name);
+        });
+        return it != byName.end() ? *it : nullptr;
+    };
+
+    const auto* birefnet = find("my-birefnet.gguf");
+    QVERIFY(birefnet && birefnet->usable);
+    QCOMPARE(birefnet->info.category, ModelCategory::Segmentation);
+    const auto* scunet = find("my-scunet.gguf");
+    QVERIFY(scunet && scunet->usable);
+    QCOMPARE(scunet->info.category, ModelCategory::Denoise);
+    const auto* esrgan = find("my-esrgan.gguf");
+    QVERIFY(esrgan && esrgan->usable);
+    QCOMPARE(esrgan->info.category, ModelCategory::Upscale);
+
+    // Recognized but seam-less arches, and unknown arches, are unusable with
+    // an explanatory note.
+    const auto* migan = find("my-migan.gguf");
+    QVERIFY(migan && !migan->usable);
+    QVERIFY(migan->note.contains(QStringLiteral("migan")));
+    const auto* rmbg = find("rmbg-1.4.gguf");
+    QVERIFY(rmbg && !rmbg->usable);
+    QVERIFY(rmbg->note.contains(QStringLiteral("rmbg")));
+}
+
+void TestModelManager::scanModelsSkipsCatalogEntriesAndUnreadableFiles() {
+    ModelManager manager{QString()};
+    // A catalog-named file must not reappear as a custom model.
+    QVERIFY(TestGguf::writeTestGguf(
+        manager.pathFor(ModelCatalog::defaultFilename(ModelCategory::Segmentation)),
+        QStringLiteral("birefnet")));
+    // A non-GGUF file: unusable with a note, not a crash.
+    QFile junk(manager.pathFor(QStringLiteral("not-a-model.gguf")));
+    QVERIFY(junk.open(QIODevice::WriteOnly));
+    junk.write("this is not a gguf");
+
+    const std::vector<ScannedModel> scanned = manager.scanModels();
+    QVERIFY(std::none_of(scanned.begin(), scanned.end(), [](const auto& model) {
+        return model.info.filename == ModelCatalog::defaultFilename(ModelCategory::Segmentation);
+    }));
+
+    auto junkIt = std::find_if(scanned.begin(), scanned.end(), [](const auto& model) {
+        return model.info.filename == QLatin1String("not-a-model.gguf");
+    });
+    QVERIFY(junkIt != scanned.end());
+    QVERIFY(!junkIt->usable);
+    QVERIFY(!junkIt->note.isEmpty());
+}
+
+void TestModelManager::importModelCopiesValidFilesIntoTheModelsDir() {
+    QTemporaryDir sourceDir;
+    QVERIFY(sourceDir.isValid());
+    const QString source = sourceDir.filePath(QStringLiteral("custom-scunet.gguf"));
+    QVERIFY(TestGguf::writeTestGguf(source, QStringLiteral("scunet")));
+
+    ModelManager manager{QString()};
+    QString error;
+    // No category argument: the architecture routes the file to its section.
+    QVERIFY(manager.importModel(source, &error));
+    QVERIFY(error.isEmpty());
+
+    // The copy is installed and scans as a usable Denoise model; the source
+    // file is left untouched.
+    QVERIFY(manager.isInstalled(QStringLiteral("custom-scunet.gguf")));
+    QVERIFY(QFile::exists(source));
+    const auto scanned = manager.scanModels();
+    auto it = std::find_if(scanned.begin(), scanned.end(), [](const auto& model) {
+        return model.info.filename == QLatin1String("custom-scunet.gguf");
+    });
+    QVERIFY(it != scanned.end());
+    QCOMPARE(it->info.category, ModelCategory::Denoise);
+    QVERIFY(it->usable);
+}
+
+void TestModelManager::importModelRejectsUnrecognizedArchAndCollisions() {
+    QTemporaryDir sourceDir;
+    QVERIFY(sourceDir.isValid());
+    const QString birefnetFile = sourceDir.filePath(QStringLiteral("some-birefnet.gguf"));
+    QVERIFY(TestGguf::writeTestGguf(birefnetFile, QStringLiteral("birefnet")));
+    const QString rmbgFile = sourceDir.filePath(QStringLiteral("some-rmbg.gguf"));
+    QVERIFY(TestGguf::writeTestGguf(rmbgFile, QStringLiteral("rmbg")));
+    const QString junkFile = sourceDir.filePath(QStringLiteral("junk.gguf"));
+    {
+        QFile f(junkFile);
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("junk");
+    }
+
+    ModelManager manager{QString()};
+    QString error;
+
+    // Recognized by vision.cpp but with no seam in this app.
+    QVERIFY(!manager.importModel(rmbgFile, &error));
+    QVERIFY(error.contains(QStringLiteral("rmbg")));
+    QVERIFY(!manager.isInstalled(QStringLiteral("some-rmbg.gguf")));
+
+    // Unreadable file.
+    QVERIFY(!manager.importModel(junkFile, &error));
+    QVERIFY(!error.isEmpty());
+
+    // A supported file imports and re-importing it collides on the name.
+    QVERIFY(manager.importModel(birefnetFile, &error));
+    QVERIFY(!manager.importModel(birefnetFile, &error));
+    QVERIFY(error.contains(QStringLiteral("already exists")));
 }
 
 void TestModelManager::ensureDefaultsProvisionedIsNoOpWithEmptyBuildDir() {

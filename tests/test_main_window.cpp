@@ -1,10 +1,12 @@
 #include <QtTest>
 
+#include <QLabel>
 #include <QStandardPaths>
 
 #include <QRadioButton>
 #include <QSettings>
 
+#include "TestGguf.h"
 #include "core/ModelCatalog.h"
 #include "core/ModelManager.h"
 #include "ui/PreviewCanvas.h"
@@ -41,6 +43,7 @@ private slots:
     void everyModelCategoryStartsWithItsDefaultSelected();
     void loadImageWiresCompareAndResetsTheView();
     void zoomStripHasAScrimSoItStaysLegibleOverAnyImage();
+    void settingsPageListsScannedCustomModels();
     void defaultExportPathIsAbsoluteAndDerivedFromTheSourceName();
     void defaultExportPathFallsBackToOutputWithoutASource();
 };
@@ -174,12 +177,59 @@ void TestMainWindow::zoomStripHasAScrimSoItStaysLegibleOverAnyImage() {
     const QImage rendered = canvas->grab().toImage().convertToFormat(QImage::Format_ARGB32);
     const QColor inside = rendered.pixelColor(12, 12);
     const QColor outside = rendered.pixelColor(380, 12);
+    if (qEnvironmentVariableIsSet("STRIP_DEBUG")) {
+        for (QPoint p : {QPoint(12, 12), QPoint(30, 12), QPoint(200, 12), QPoint(380, 12)}) {
+            const QColor c = rendered.pixelColor(p);
+            qDebug() << p << c.name() << (c.red() + c.green() + c.blue()) / 3;
+        }
+        rendered.save(QStringLiteral("/tmp/strip_fail.png"));
+    }
     const int insideBrightness = (inside.red() + inside.green() + inside.blue()) / 3;
     const int outsideBrightness = (outside.red() + outside.green() + outside.blue()) / 3;
     // The scrim darkens whatever is beneath (checkerboard is 160/210 gray).
     QVERIFY2(insideBrightness < 120,
              qPrintable(QStringLiteral("strip too bright: %1").arg(insideBrightness)));
     QVERIFY(outsideBrightness > insideBrightness);
+}
+
+void TestMainWindow::settingsPageListsScannedCustomModels() {
+    // Folder-as-state: files in the models directory that are not catalog
+    // entries become settings rows, classified by GGUF architecture.
+    ModelManager writer{QString()};
+    QVERIFY(TestGguf::writeTestGguf(writer.pathFor(QStringLiteral("custom-scunet.gguf")),
+                                    QStringLiteral("scunet")));
+    QVERIFY(TestGguf::writeTestGguf(writer.pathFor(QStringLiteral("some-rmbg.gguf")),
+                                    QStringLiteral("rmbg")));
+
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Denoise")));
+    MainWindow window(pipeline, std::make_shared<ModelManager>(QString()));
+
+    // The usable custom model appears as an enabled radio (it is installed).
+    QRadioButton* customRadio = nullptr;
+    for (QRadioButton* radio : window.findChildren<QRadioButton*>()) {
+        if (radio->text() == QLatin1String("custom-scunet.gguf")) {
+            customRadio = radio;
+        }
+    }
+    QVERIFY2(customRadio, "custom model radio missing");
+    QVERIFY(customRadio->isEnabled());
+
+    // The unrecognized file must not offer itself as a model; it appears as
+    // a disabled (grayed) entry instead.
+    for (QRadioButton* radio : window.findChildren<QRadioButton*>()) {
+        QVERIFY2(radio->text() != QLatin1String("some-rmbg.gguf"),
+                 "unrecognized file must not be selectable");
+    }
+    QLabel* grayed = nullptr;
+    for (QLabel* label : window.findChildren<QLabel*>()) {
+        if (label->text() == QLatin1String("some-rmbg.gguf")) {
+            grayed = label;
+        }
+    }
+    QVERIFY2(grayed, "unrecognized file should be listed grayed out");
+    QVERIFY(!grayed->isEnabled());
+    QVERIFY2(!grayed->toolTip().isEmpty(), "grayed rows should explain why via tooltip");
 }
 
 void TestMainWindow::defaultExportPathIsAbsoluteAndDerivedFromTheSourceName() {

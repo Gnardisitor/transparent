@@ -3,11 +3,14 @@
 #include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QStandardPaths>
 #include <QUrl>
+
+#include <gguf.h>
 
 #include <memory>
 
@@ -30,6 +33,90 @@ QString ModelManager::pathFor(const QString& filename) const {
 
 bool ModelManager::isInstalled(const QString& filename) const {
     return QFile::exists(pathFor(filename));
+}
+
+QString ModelManager::readArchitecture(const QString& filePath) const {
+    // Metadata-only read: with ctx == nullptr and no_alloc set, gguf parses
+    // the header and KV pairs but never touches tensor data, so this stays
+    // cheap even for multi-GB checkpoints.
+    gguf_init_params params{};
+    params.no_alloc = true;
+    params.ctx = nullptr;
+    gguf_context* context = gguf_init_from_file(filePath.toLocal8Bit().constData(), params);
+    if (!context) {
+        return {};
+    }
+    QString architecture;
+    const int64_t key = gguf_find_key(context, "general.architecture");
+    if (key >= 0 && gguf_get_kv_type(context, key) == GGUF_TYPE_STRING) {
+        architecture = QString::fromUtf8(gguf_get_val_str(context, key));
+    }
+    gguf_free(context);
+    return architecture;
+}
+
+std::vector<ScannedModel> ModelManager::scanModels() const {
+    std::vector<ScannedModel> result;
+
+    QSet<QString> catalogNames;
+    for (const ModelInfo& info : ModelCatalog::allModels()) {
+        catalogNames.insert(info.filename);
+    }
+
+    QDir dir(modelsDir());
+    const QStringList files =
+        dir.entryList({QStringLiteral("*.gguf")}, QDir::Files, QDir::Name);
+    for (const QString& fileName : files) {
+        if (catalogNames.contains(fileName)) {
+            continue; // already listed by the curated catalog
+        }
+        ScannedModel model;
+        model.info.filename = fileName;
+        model.info.displayName = fileName;
+        model.info.license = QStringLiteral("user-provided (license not verified)");
+        model.info.approxSizeBytes = QFileInfo(dir.filePath(fileName)).size();
+        const QString architecture = readArchitecture(dir.filePath(fileName));
+        if (auto category = ModelCatalog::categoryForArchitecture(architecture)) {
+            model.info.category = *category;
+            model.usable = true;
+        } else {
+            model.usable = false;
+            model.note = architecture.isEmpty()
+                ? QStringLiteral("Not a readable GGUF file")
+                : QStringLiteral("Unsupported architecture: %1").arg(architecture);
+        }
+        result.push_back(std::move(model));
+    }
+    return result;
+}
+
+bool ModelManager::importModel(const QString& sourcePath, QString* errorMessage) {
+    auto fail = [errorMessage](const QString& message) {
+        if (errorMessage) {
+            *errorMessage = message;
+        }
+        return false;
+    };
+
+    const QString architecture = readArchitecture(sourcePath);
+    if (!ModelCatalog::categoryForArchitecture(architecture)) {
+        return fail(architecture.isEmpty()
+            ? QStringLiteral("The file is not a readable GGUF model.")
+            : QStringLiteral(
+                  "Unsupported model architecture '%1'. This app can load %2 models.")
+                  .arg(architecture, QStringLiteral("birefnet, scunet and esrgan")));
+    }
+
+    const QString fileName = QFileInfo(sourcePath).fileName();
+    if (QFile::exists(pathFor(fileName))) {
+        return fail(QStringLiteral("A model named '%1' already exists. Rename the file and "
+                                    "try again.")
+                        .arg(fileName));
+    }
+    if (!QFile::copy(sourcePath, pathFor(fileName))) {
+        return fail(QStringLiteral("Could not copy the file into the models directory."));
+    }
+    return true;
 }
 
 void ModelManager::ensureDefaultsProvisioned() {

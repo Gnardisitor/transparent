@@ -102,4 +102,36 @@ QString settingsKey(ModelCategory category) {
     return QString();
 }
 
+std::optional<ModelCategory> categoryForArchitecture(const QString& architecture) {
+    if (architecture == QLatin1String("birefnet")) {
+        return ModelCategory::Segmentation;
+    }
+    if (architecture == QLatin1String("scunet")) {
+        return ModelCategory::Denoise;
+    }
+    if (architecture == QLatin1String("esrgan")) {
+        return ModelCategory::Upscale;
+    }
+    return std::nullopt;
+}
+
+bool isRecognizedArchitecture(const QString& architecture) {
+    return categoryForArchitecture(architecture).has_value() ||
+           architecture == QLatin1String("migan") ||
+           architecture == QLatin1String("depthanything") ||
+           architecture == QLatin1String("mobile-sam");
+}
+
+QString architectureForCategory(ModelCategory category) {
+    switch (category) {
+        case ModelCategory::Segmentation:
+            return QStringLiteral("birefnet");
+        case ModelCategory::Denoise:
+            return QStringLiteral("scunet");
+        case ModelCategory::Upscale:
+            return QStringLiteral("esrgan");
+    }
+    return QString();
+}
+
 } // namespace ModelCatalog

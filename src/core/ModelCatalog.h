@@ -2,6 +2,7 @@
 
 #include <QString>
 
+#include <optional>
 #include <vector>
 
 // Segmentation backs both BackgroundRemovalStep and BokehStep (they share
@@ -40,5 +41,19 @@ QString defaultFilename(ModelCategory category);
 // QSettings key each category's active-model filename is persisted under,
 // shared by main.cpp and MainWindow.
 QString settingsKey(ModelCategory category);
+
+// Map from a GGUF `general.architecture` value to the app category whose
+// model seam can load it (birefnet -> Segmentation, scunet -> Denoise,
+// esrgan -> Upscale). nullopt for unknown architectures and for arches
+// vision.cpp recognizes but this app has no seam for (migan, depthanything,
+// mobile-sam) — the model-management scan uses this to classify files.
+std::optional<ModelCategory> categoryForArchitecture(const QString& architecture);
+
+// True when vision.cpp knows the architecture at all, even without a seam.
+bool isRecognizedArchitecture(const QString& architecture);
+
+// The architecture that loads in `category` (the inverse of the mapping
+// above); empty string if none — used in user-facing error messages.
+QString architectureForCategory(ModelCategory category);
 
 } // namespace ModelCatalog

@@ -47,7 +47,10 @@ Inherent GIF limitations (not bugs) are a 256-color-max palette shared across al
 
 - MIT-licensed, strong quality for salient object segmentation/matting.
 - Other models considered:
-  - RMBG-1.4/2.0 (BRIA): rejected, CC BY-NC 4.0, non-commercial only.
+  - RMBG-1.4/2.0 (BRIA): rejected, `bria-rmbg-1.4` license (source-available, non-commercial,
+    redistribution-restricted). IS-Net-family architecture, unsupported by vision.cpp. Users who
+    want it anyway can bring their own weights via the custom-model import (below); this project
+    never redistributes the weights.
   - MODNet: rejected, CC BY-NC-SA 4.0, non-commercial and portrait-specific.
   - IS-Net/U2Net: a viable fallback (Apache-2.0, smaller/faster) but visibly lower quality.
   - BEN2-base: MIT, a close alternative worth a look if BiRefNet-lite underperforms in practice.
@@ -57,6 +60,59 @@ Inherent GIF limitations (not bugs) are a 256-color-max palette shared across al
 Both `SegmentationModel` (BiRefNet-lite / BiRefNet-dynamic / BiRefNet full) and `UpscaleModel` (foolhardy_Remacri / NMKD-Superscale-SP) are swappable, using license-clean checkpoints published at the same huggingface.co/Acly account the build already downloads from.
 
 Adjustable upscale *amount* (as opposed to model choice) was considered and rejected. Every compatible Real-ESRGAN checkpoint is fixed at 4x, and the only different-shaped file (`RealESRGAN-x4plus_anime-6B`) is a "plus" variant `esrgan_load_model` does not support.
+
+### Custom models (done)
+
+Goal: let the user add models that are deliberately not in the curated catalog — the motivating
+case is RMBG-1.4, which cannot be pre-hosted due to its license. Designed to stay minimal:
+the audience is advanced users doing manual setup once.
+
+Facts the design rests on (verified in the fork and upstream):
+
+- vision.cpp recognizes exactly six GGUF architectures: `birefnet`, `scunet`, `esrgan`, `migan`,
+  `depthanything`, `mobile-sam`. Transparent's seams are single-architecture per category:
+  Segmentation = birefnet only, Denoise = scunet only, Upscale = esrgan only.
+- RMBG-1.4 is IS-Net/U2-Net-family — **not** loadable today, and Acly's ecosystem does not
+  support it either (krita-vision-tools = SAM/BiRefNet/MI-GAN, pinning the same vision.cpp base
+  commit this fork started from). Supporting it means a new architecture in the fork: converter
+  support, arch code, parity tests — the SCUNet recipe, deferred as its own future project.
+- A GGUF's `general.architecture` is readable cheaply through visp's `model_file` metadata, so
+  imports/scans can validate architecture without loading weights.
+
+Decisions:
+
+- **Folder-as-state: the models directory is scanned for `.gguf` files.** Recognized
+  architectures auto-register under their category (`birefnet` → Segmentation, `scunet` →
+  Denoise, `esrgan` → Upscale). No import dialog, no naming step, **no persisted custom-model
+  list** — the folder is the state, so files deleted behind the app's back simply disappear on
+  the next scan (stale QSettings entries were the alternative; rejected).
+- Display name = filename; custom rows show "user-provided (license not verified)" instead of a
+  license, since nothing about an imported file can be verified.
+- **One "Add model from disk…" button at the bottom of Settings**: file dialog → validate
+  architecture → copy into the models directory → row appears in the right section (the
+  architecture routes it; the button needs no category input). A convenience over
+  hand-copying into AppData; the scan works without it.
+- **Unrecognized `.gguf` files render as grayed rows** with a tooltip naming the architecture
+  (e.g. "Unsupported architecture: rmbg") — answers "why doesn't my file show up?" without any
+  extra flow. Covers arches vision.cpp knows but transparent has no seam for (`migan`,
+  `depthanything`, `mobile-sam`) the same way.
+- **Removal is file-manager deletion only** this round; no delete UI.
+- **Licensing rule: transparent-models never hosts non-commercial weights.** License-restricted
+  models (RMBG-1.4 etc.) enter only via user import; the project's repos and download flow stay
+  permissively licensed (matching the GPLv3 + permissive-models position already in PLAN).
+
+Implementation notes: the scan reads only GGUF headers via `gguf_init_from_file` with
+metadata-only params (never tensor data), so it is cheap even with multi-GB files present;
+Settings triggers a rescan on open (`showEvent`), at construction, and after any import;
+`ModelManager::isInstalled`/`pathFor` are already filename-based, so selection persistence
+(`models/<category>Model` keys) works for custom files unchanged. Conflict handling for the
+Add button: if the chosen file's name collides with an existing model, refuse and ask the user
+to rename the file. As built: `ModelManager::scanModels()`/`importModel()` +
+`ModelCatalog::categoryForArchitecture`/`isRecognizedArchitecture`/`architectureForCategory`
+(classification tests in test_model_manager/test_model_catalog); SettingsPage renders scanned
+rows per category (no download button), an "Other files in the models folder" group for
+unusable files, and re-applies the persisted active selection after each rescan so a custom
+active model keeps its radio check.
 
 Design:
 
