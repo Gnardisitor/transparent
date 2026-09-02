@@ -18,6 +18,7 @@ SettingsPage::SettingsPage(ModelManager* modelManager, QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(buildCategorySection(ModelCategory::Segmentation,
                                             QStringLiteral("Background removal / bokeh model")));
+    layout->addWidget(buildCategorySection(ModelCategory::Denoise, QStringLiteral("Denoise model")));
     layout->addWidget(buildCategorySection(ModelCategory::Upscale, QStringLiteral("Upscale model")));
     layout->addWidget(buildBokehStrengthSection());
     layout->addStretch(1);

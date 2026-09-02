@@ -1,9 +1,11 @@
 #include "core/BackgroundRemovalStep.h"
 #include "core/BokehStep.h"
+#include "core/DenoiseStep.h"
 #include "core/ModelCatalog.h"
 #include "core/ModelManager.h"
 #include "core/Pipeline.h"
 #include "core/UpscaleStep.h"
+#include "core/VisionCppDenoiseModel.h"
 #include "core/VisionCppSegmentationModel.h"
 #include "core/VisionCppUpscaleModel.h"
 #include "ui/MainWindow.h"
@@ -55,6 +57,11 @@ int main(int argc, char** argv) {
             .value(ModelCatalog::settingsKey(ModelCategory::Upscale),
                    ModelCatalog::defaultFilename(ModelCategory::Upscale))
             .toString();
+    const QString denoiseFilename =
+        settings
+            .value(ModelCatalog::settingsKey(ModelCategory::Denoise),
+                   ModelCatalog::defaultFilename(ModelCategory::Denoise))
+            .toString();
     const int bokehStrengthPercent =
         settings.value(BokehStep::settingsKey(), BokehStep::kDefaultStrengthPercent).toInt();
 
@@ -65,6 +72,14 @@ int main(int argc, char** argv) {
     auto backgroundRemoval = std::make_shared<BackgroundRemovalStep>(segmentationModel);
     if (backgroundRemoval->isReady()) {
         pipeline->addStep(backgroundRemoval);
+    }
+
+    // Denoising runs before upscaling (upscaling amplifies noise); see PLAN.md.
+    auto denoiseModel =
+        std::make_shared<VisionCppDenoiseModel>(modelManager->pathFor(denoiseFilename));
+    auto denoise = std::make_shared<DenoiseStep>(denoiseModel);
+    if (denoise->isReady()) {
+        pipeline->addStep(denoise);
     }
 
     auto upscaleModel =

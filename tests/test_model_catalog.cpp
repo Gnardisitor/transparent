@@ -75,6 +75,8 @@ void TestModelCatalog::defaultsAreInTheCatalog() {
     // would silently fail to load on first run.
     QVERIFY(ModelCatalog::findByFilename(
                 ModelCatalog::defaultFilename(ModelCategory::Segmentation)) != nullptr);
+    QVERIFY(ModelCatalog::findByFilename(
+                ModelCatalog::defaultFilename(ModelCategory::Denoise)) != nullptr);
     QVERIFY(ModelCatalog::findByFilename(ModelCatalog::defaultFilename(ModelCategory::Upscale)) !=
             nullptr);
 }

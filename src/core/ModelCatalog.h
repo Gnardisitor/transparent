@@ -5,8 +5,8 @@
 #include <vector>
 
 // Segmentation backs both BackgroundRemovalStep and BokehStep (they share
-// one SegmentationModel); Upscale backs UpscaleStep.
-enum class ModelCategory { Segmentation, Upscale };
+// one SegmentationModel); Upscale backs UpscaleStep; Denoise backs DenoiseStep.
+enum class ModelCategory { Segmentation, Upscale, Denoise };
 
 // One curated, downloadable model checkpoint, fixed at compile time.
 // `filename` doubles as the on-disk identity: a model counts as installed

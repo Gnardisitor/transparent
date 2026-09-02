@@ -36,6 +36,21 @@ const std::vector<ModelInfo>& catalog() {
          QStringLiteral("https://huggingface.co/Acly/Real-ESRGAN-GGUF/resolve/main/"
                          "ESRGAN-4x-NMKD-Superscale-SP_178000_G-F16.gguf"),
          QStringLiteral("cc8c767fc88109b3b25b3580c159fe7e81cec7a52ccb5158ae78d5709f064ffb")},
+        // SCUNet (Swin-Conv-UNet) blind real-world color denoising, converted to
+        // GGUF by the vision.cpp fork this repo builds against. Hosted on the
+        // project's own Forgejo LFS repo (see PLAN.md, "Denoising").
+        {ModelCategory::Denoise, QStringLiteral("SCUNet real GAN"),
+         QStringLiteral("scunet-color-real-gan-F16.gguf"), QStringLiteral("Apache-2.0"),
+         35'932'448,
+         QStringLiteral("https://forge.db-serve.com/dbajan/transparent-models/media/branch/main/"
+                         "scunet-color-real-gan-F16.gguf"),
+         QStringLiteral("692e7b7d24979a1fc2ca15f2984ded55ff7b6f7bf24882a7c9aa81a03a0c9a7e")},
+        {ModelCategory::Denoise, QStringLiteral("SCUNet real PSNR"),
+         QStringLiteral("scunet-color-real-psnr-F16.gguf"), QStringLiteral("Apache-2.0"),
+         35'932'448,
+         QStringLiteral("https://forge.db-serve.com/dbajan/transparent-models/media/branch/main/"
+                         "scunet-color-real-psnr-F16.gguf"),
+         QStringLiteral("e839ee6839f265b254d498510bdb3c2e62700b8b34cfe8679408511b5c4c5254")},
     };
     return models;
 }
@@ -64,14 +79,27 @@ const ModelInfo* findByFilename(const QString& filename) {
 }
 
 QString defaultFilename(ModelCategory category) {
-    return category == ModelCategory::Segmentation
-               ? QStringLiteral("BiRefNet-lite-F16.gguf")
-               : QStringLiteral("ESRGAN-4x-foolhardy_Remacri-F16.gguf");
+    switch (category) {
+        case ModelCategory::Segmentation:
+            return QStringLiteral("BiRefNet-lite-F16.gguf");
+        case ModelCategory::Denoise:
+            return QStringLiteral("scunet-color-real-gan-F16.gguf");
+        case ModelCategory::Upscale:
+            return QStringLiteral("ESRGAN-4x-foolhardy_Remacri-F16.gguf");
+    }
+    return QString();
 }
 
 QString settingsKey(ModelCategory category) {
-    return category == ModelCategory::Segmentation ? QStringLiteral("models/segmentationModel")
-                                                     : QStringLiteral("models/upscaleModel");
+    switch (category) {
+        case ModelCategory::Segmentation:
+            return QStringLiteral("models/segmentationModel");
+        case ModelCategory::Denoise:
+            return QStringLiteral("models/denoiseModel");
+        case ModelCategory::Upscale:
+            return QStringLiteral("models/upscaleModel");
+    }
+    return QString();
 }
 
 } // namespace ModelCatalog

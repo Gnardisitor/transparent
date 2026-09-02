@@ -9,15 +9,17 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # vision.cpp is consumed as a static library (BUILD_SHARED_LIBS=OFF below).
-# Its headers mark the public API with VISP_API, which is __declspec(dllimport)
-# on MSVC unless VISP_STATIC_DEFINE is defined (added by
-# cmake/patch-visioncpp-static.cmake). Without it the link fails with
+# It is built from the project's own fork (see PLAN.md, "Denoising"), which adds
+# the SCUNet denoising architecture and folds in the VISP_STATIC_DEFINE fix
+# (formerly applied by cmake/patch-visioncpp-static.cmake, now deleted): the
+# headers mark the public API with VISP_API, which is __declspec(dllimport) on
+# MSVC unless VISP_STATIC_DEFINE is defined. Without it the link fails with
 # LNK2019 on "__imp_..." symbols.
-
-# Consumers of visioncpp (transparent_core, tests) need the patched header's
-# VISP_STATIC_DEFINE so VISP_API expands to nothing instead of dllimport.
-# This propagates into the visioncpp subdirectory too, where it is also
-# correct: the static library then exports nothing via dllexport.
+#
+# Consumers of visioncpp (transparent_core, tests) need VISP_STATIC_DEFINE so
+# VISP_API expands to nothing instead of dllimport. This propagates into the
+# visioncpp subdirectory too, where it is also correct: the static library then
+# exports nothing via dllexport.
 add_compile_definitions(VISP_STATIC_DEFINE)
 
 option(TRANSPARENT_BUILD_TESTS "Build unit tests" ON)
@@ -26,11 +28,14 @@ include(FetchContent)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(VISP_VULKAN ON CACHE BOOL "" FORCE)
 set(VISP_TESTS OFF CACHE BOOL "" FORCE)
+# TODO: point GIT_REPOSITORY/GIT_TAG at the pushed fork
+# (forge.db-serve.com/dbajan/vision.cpp) pinned to a tag once it exists. Until
+# then, configure with:
+#   -DFETCHCONTENT_SOURCE_DIR_VISIONCPP=$HOME/Documents/Dev/vision.cpp
 FetchContent_Declare(visioncpp
   GIT_REPOSITORY https://github.com/Acly/vision.cpp.git
   GIT_TAG v0.3.1
   GIT_SUBMODULES_RECURSE TRUE
-  PATCH_COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_LIST_DIR}/cmake/patch-visioncpp-static.cmake"
 )
 FetchContent_MakeAvailable(visioncpp)
 
