@@ -15,6 +15,8 @@
 
 class BackgroundRemovalStep;
 class BokehStep;
+class DenoiseModel;
+class DenoiseStep;
 class ModelManager;
 class QComboBox;
 class QDialog;
@@ -64,6 +66,7 @@ private slots:
     // relevant Pipeline steps.
     void onModelSelected(ModelCategory category, QString filename);
     void onSegmentationModelLoaded();
+    void onDenoiseModelLoaded();
     void onUpscaleModelLoaded();
     // Persists the strength to QSettings; live-previews via a cheap mask
     // reblend when Bokeh is the active output step.
@@ -86,6 +89,7 @@ private:
 
     std::shared_ptr<BackgroundRemovalStep> backgroundRemovalStep() const;
     std::shared_ptr<BokehStep> bokehStep() const;
+    std::shared_ptr<DenoiseStep> denoiseStep() const;
     std::shared_ptr<UpscaleStep> upscaleStep() const;
 
     // True if Bokeh is the last active step, i.e. resultImage_ is Bokeh's
@@ -122,11 +126,13 @@ private:
     // either is in flight. Separate watchers because the categories load
     // different model types.
     QFutureWatcher<std::shared_ptr<SegmentationModel>> segmentationModelWatcher_;
+    QFutureWatcher<std::shared_ptr<DenoiseModel>> denoiseModelWatcher_;
     QFutureWatcher<std::shared_ptr<UpscaleModel>> upscaleModelWatcher_;
     bool modelLoading_ = false;
     // Filename each in-flight load is fetching; the watcher result doesn't
     // carry it.
     QString pendingSegmentationFilename_;
+    QString pendingDenoiseFilename_;
     QString pendingUpscaleFilename_;
     // Dedicated watcher for the bokeh live-preview reblend, so a slider
     // drag never competes with processing or model loads.

@@ -96,6 +96,91 @@ Fork specifics (implemented in the `vision.cpp` working copy):
 - `ModelCatalog`: two entries (GAN default, PSNR), on-demand download with SHA256 verification through the existing `ModelManager` flow, not bundled, forge `/media/branch/main/` raw-LFS URLs.
 - **Large images: full-res inference up to 2.25MP (~1500×1500); above that, 512px tiles with 32px overlap**, feather-blended inside visp's `scunet_compute` (mirroring `esrgan_compute`; visp's own CLI tiles ESRGAN at 224/16 for the same VRAM reason, and the 64px-aligned tile sizes give edge tiles replicate padding for free, which SCUNet's /64 requirement needs anyway). Constants are revisited after testing on the RX 9070 XT — the real constraint is what a 12MP photo does to VRAM.
 
+#### Denoise performance (profiled 2026-09-01, RX 9070 XT / Vulkan)
+
+Measurements at 512x512 input, GPU: full model ~464ms; conv-only skeleton (all
+attention blocks removed) ~50ms; two stage-1 attention blocks add ~62ms (~31ms per
+block); two body-stage blocks are negligible (~45ms total). Conclusion: **window
+attention is ~89% of runtime**, and the full-resolution stage-1 attention (8 blocks:
+m_down1 + m_up1) is more than half of it by itself. Overall utilization is far below
+hardware capability (~1-2% of the 9070 XT's fp16 throughput), so the headroom is real
+but locked inside ggml's Vulkan flash-attention path (n_heads=1, head_dim=32, 64-token
+windows, masked SW variants).
+
+Done during this pass (keep):
+- Converter robustness: config inference tolerates groups with zero blocks and
+  checkpoints without any ConvTransBlock; `scunet_compute` skips attention constants
+  when no attention blocks exist (unused constants can't get backend buffers).
+- (A `ggml_conv_2d_cwhn` patch to the vendored ggml made during this pass was reverted
+  in the second pass — see below; the submodule is back to Acly's `vision-20260331`
+  commit, unmodified.)
+
+Second pass (done, profile-driven):
+
+The "attention is ~89% of runtime" conclusion above was wrong — the skeleton-vs-blocks
+estimate was misleading. A real per-op GPU profile (`GGML_VK_PERF_LOGGER=1`, supported by
+the vendored ggml) at 512x512 on the 464ms baseline showed: IM2COL 200ms, ADD 81ms,
+CONT 44ms, NORM 31ms, all matmuls ~40ms, flash attention ~5ms. The dominant costs were
+memory-bound elementwise ops and the conv im2col expansion, not attention math.
+
+1. **Conv im2col elimination (the big win, 442 -> 289ms).** The copy audit found that
+   *all* 61 convs ran the `ggml_conv_2d` im2col+mul_mat fallback: visp's CWHN
+   presentation is `[C,W,H,N]`, which never satisfies ggml's channels-contiguous check
+   (that wants `[W,H,C,N]` with `nb[2]==type_size`), so the previous session's
+   `ggml_conv_2d_cwhn` branch was dead code on Vulkan (its "~2-4%" claim came
+   from measurement noise). Worse, `ggml_conv_2d_cwhn` can never dispatch on Vulkan at
+   all: `ggml_vk_conv_2d` asserts the input's innermost dim is densely packed
+   (`nb10 == sizeof(float)`), which contradicts channels-dense memory for C>1. The fix
+   in `nn.cpp conv_2d` keeps visp's `[C,W,H,N]` presentation and routes the
+   contiguous-input case through one `cont(permute)` copy per side into
+   `ggml_conv_2d_direct` (W-dense, so the direct Vulkan conv2d shader applies, no
+   im2col tensor). Zero shader changes; CPU keeps its `conv_2d_direct_cwhn` branch.
+   The dead branch and the vendored-ggml patch it needed were removed afterwards, so
+   `depend/llama` is unmodified again; results identical (benchmarks and the ≤1 LSB
+   output check re-verified after the revert).
+2. **LayerNorm affine folding (289 -> 268ms).** `scunet::swin_block` no longer emits
+   LN mul/add: `window_attention` and `mlp` take the pre-norm tokens, run only
+   `ggml_norm` (statistics), and fold γ into the following linear's weight and
+   β·W+b into its bias (`linear_folded_ln`, computed in f32 from the f16 weights at
+   graph-build time, a few KB). The norm commutes with roll and window partition.
+   Also: the attention-mask `ggml_repeat` for n_heads==1 is skipped (it was a
+   same-shape full-tensor copy); `split_qkv` was split into `split_qkv` +
+   `split_qkv_proj` so the folded path can reuse the QKV reshape logic.
+3. **Stage-attention micro-benchmark (flash vs default).** Standalone harness timed
+   `scunet::window_attention` at all four real stage shapes (dim 32/64/128/256,
+   n_heads 1/2/4/8, 512px tile): non-flash was 10-22% faster at n_heads==1, a wash
+   elsewhere; end-to-end flash on/off was within run-to-run noise after the conv fix
+   (289 vs 294ms). Conclusion: no size-conditional flag; flash stays at its backend
+   default. Attention is now ~5ms flash + ~40ms matmul per tile and no longer worth
+   special-casing.
+4. **F16 activations: investigated, blocked, not pursued.** Vulkan has `pipeline_norm_f32`
+   only (no f16 norm), and the conv2d shader is f32-in/f32-out only; the residual
+   elementwise costs (ADD ~75ms, CONT ~42ms, NORM ~32ms after the fixes) are all
+   generic ggml-Vulkan shader throughput (a [32,512,512] add runs at ~0.27 TB/s on the
+   9070 XT). Making these f16 means writing new backend shaders and a compute-dtype
+   seam through `scunet_generate` — foundation work, explicitly not worth it here.
+   Same for eliminating the two permute-copies per conv (needs a channels-dense
+   conv2d shader variant): accepted as-is.
+
+Re-benchmark (final, RX 9070 XT / Vulkan, scunet-color-real-gan): 512x512 442 ->
+~268ms (1.65x); 1024x1024 full-res 916ms; 12MP tiled (4032x3024, 512px tiles) ~9.8s
+(was ~22s, 2.2x). CPU fallback unaffected (512x512 ~1.7s). Correctness: parity suite
+10/10 on CPU, C++ ctest green, optimized GPU/CPU output within 1 LSB per channel of
+the pre-optimization output (which was itself ~0.5/255 vs the PyTorch reference).
+All changes are op-graph level and hardware-neutral (no shader edits, no
+vendor/hardware conditionals). Two suite failures are pre-existing and unrelated:
+mobile-sam `test_predict_masks` (documented above) and `test_birefnet
+::test_swin_transformer`, which is tolerance-flaky against its unseeded random inputs
+(seeded runs show the numerics are bit-identical to the pristine fork; ~30% of seeds
+exceed its atol=0.002 regardless of these changes).
+
+Uncommitted at the time of writing (user commits/pushes): in the vision.cpp fork the
+previous session's converter + compute fixes (convert.py, vision.cpp) plus this
+session's conv-direct fix, LN folding, repeat skip and split_qkv refactor (nn.cpp,
+nn.h, scunet.cpp, scunet.h); `depend/llama` is clean at Acly's `vision-20260331`
+commit, no local patches. In transparent the step reorder (BackgroundRemoval -> Bokeh
+-> Denoise -> Upscale) plus this PLAN section.
+
 ### Language and UI (C++ and Qt Widgets)
 
 - C++ links directly against vision.cpp's native API. No FFI layer, smallest binary, fastest startup.

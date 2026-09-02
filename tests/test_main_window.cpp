@@ -1,5 +1,11 @@
 #include <QtTest>
 
+#include <QRadioButton>
+#include <QSettings>
+#include <QStandardPaths>
+
+#include "core/ModelCatalog.h"
+#include "core/ModelManager.h"
 #include "core/Pipeline.h"
 #include "core/PipelineStep.h"
 #include "ui/MainWindow.h"
@@ -28,7 +34,9 @@ class TestMainWindow : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void constructionLeavesDefaultStepEnabledDespiteAdvancedPagePopulation();
+    void everyModelCategoryStartsWithItsDefaultSelected();
     void defaultExportPathIsAbsoluteAndDerivedFromTheSourceName();
     void defaultExportPathFallsBackToOutputWithoutASource();
 };
@@ -56,6 +64,53 @@ void TestMainWindow::constructionLeavesDefaultStepEnabledDespiteAdvancedPagePopu
     // QSignalBlocker for the fix.
     QVERIFY(pipeline->isStepEnabled(0));
     QVERIFY(!pipeline->isStepEnabled(1));
+}
+
+void TestMainWindow::initTestCase() {
+    // Redirect AppDataLocation so QSettings and ModelManager stay out of the
+    // developer's real configuration.
+    QStandardPaths::setTestModeEnabled(true);
+}
+
+void TestMainWindow::everyModelCategoryStartsWithItsDefaultSelected() {
+    // Regression test: the Settings dialog used to open with no Denoise model
+    // selected. MainWindow only seeded Segmentation and Upscale from
+    // QSettings; the Denoise category (added later) was missed, so its radios
+    // all started unchecked and the category had no visible active model.
+    QSettings settings;
+    settings.remove(QStringLiteral("models/segmentationModel"));
+    settings.remove(QStringLiteral("models/denoiseModel"));
+    settings.remove(QStringLiteral("models/upscaleModel"));
+
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Background Removal")));
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Denoise")));
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Upscale")));
+
+    ModelManager manager(QString()); // empty build defaults dir; fine for tests
+    MainWindow window(pipeline, std::make_shared<ModelManager>(QString()));
+
+    const auto radios = window.findChildren<QRadioButton*>();
+    QVERIFY(!radios.isEmpty());
+    for (const ModelInfo& info : ModelCatalog::allModels()) {
+        QRadioButton* radio = nullptr;
+        for (QRadioButton* candidate : radios) {
+            if (candidate->text() == info.displayName) {
+                radio = candidate;
+                break;
+            }
+        }
+        QVERIFY2(radio, qPrintable(QStringLiteral("radio for %1").arg(info.displayName)));
+
+        // With settings cleared, every category's default entry must be the
+        // checked one.
+        const QString active =
+            QSettings()
+                .value(ModelCatalog::settingsKey(info.category),
+                       ModelCatalog::defaultFilename(info.category))
+                .toString();
+        QCOMPARE(radio->isChecked(), active == info.filename);
+    }
 }
 
 void TestMainWindow::defaultExportPathIsAbsoluteAndDerivedFromTheSourceName() {

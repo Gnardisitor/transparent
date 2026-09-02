@@ -2,12 +2,14 @@
 
 #include "core/BackgroundRemovalStep.h"
 #include "core/BokehStep.h"
+#include "core/DenoiseStep.h"
 #include "core/GifIO.h"
 #include "core/ImageFormats.h"
 #include "core/ModelManager.h"
 #include "core/SegmentationModel.h"
 #include "core/UpscaleModel.h"
 #include "core/UpscaleStep.h"
+#include "core/VisionCppDenoiseModel.h"
 #include "core/VisionCppSegmentationModel.h"
 #include "core/VisionCppUpscaleModel.h"
 #include "ui/SettingsPage.h"
@@ -180,6 +182,12 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
                        ModelCatalog::defaultFilename(ModelCategory::Segmentation))
                 .toString());
         settingsPage_->setActiveModel(
+            ModelCategory::Denoise,
+            settings
+                .value(ModelCatalog::settingsKey(ModelCategory::Denoise),
+                       ModelCatalog::defaultFilename(ModelCategory::Denoise))
+                .toString());
+        settingsPage_->setActiveModel(
             ModelCategory::Upscale,
             settings
                 .value(ModelCatalog::settingsKey(ModelCategory::Upscale),
@@ -224,6 +232,8 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
             &MainWindow::onBatchFinished);
     connect(&segmentationModelWatcher_, &QFutureWatcher<std::shared_ptr<SegmentationModel>>::finished,
             this, &MainWindow::onSegmentationModelLoaded);
+    connect(&denoiseModelWatcher_, &QFutureWatcher<std::shared_ptr<DenoiseModel>>::finished, this,
+            &MainWindow::onDenoiseModelLoaded);
     connect(&upscaleModelWatcher_, &QFutureWatcher<std::shared_ptr<UpscaleModel>>::finished, this,
             &MainWindow::onUpscaleModelLoaded);
     connect(&bokehPreviewWatcher_, &QFutureWatcher<QImage>::finished, this,
@@ -299,6 +309,10 @@ std::shared_ptr<BackgroundRemovalStep> MainWindow::backgroundRemovalStep() const
 
 std::shared_ptr<BokehStep> MainWindow::bokehStep() const {
     return findStepByName<BokehStep>(QStringLiteral("Bokeh"));
+}
+
+std::shared_ptr<DenoiseStep> MainWindow::denoiseStep() const {
+    return findStepByName<DenoiseStep>(QStringLiteral("Denoise"));
 }
 
 std::shared_ptr<UpscaleStep> MainWindow::upscaleStep() const {
@@ -637,6 +651,12 @@ void MainWindow::onModelSelected(ModelCategory category, QString filename) {
             QtConcurrent::run([path]() -> std::shared_ptr<SegmentationModel> {
                 return std::make_shared<VisionCppSegmentationModel>(path);
             }));
+    } else if (category == ModelCategory::Denoise) {
+        pendingDenoiseFilename_ = filename;
+        denoiseModelWatcher_.setFuture(
+            QtConcurrent::run([path]() -> std::shared_ptr<DenoiseModel> {
+                return std::make_shared<VisionCppDenoiseModel>(path);
+            }));
     } else {
         pendingUpscaleFilename_ = filename;
         upscaleModelWatcher_.setFuture(QtConcurrent::run([path]() -> std::shared_ptr<UpscaleModel> {
@@ -670,6 +690,33 @@ void MainWindow::onSegmentationModelLoaded() {
             settings
                 .value(ModelCatalog::settingsKey(ModelCategory::Segmentation),
                        ModelCatalog::defaultFilename(ModelCategory::Segmentation))
+                .toString());
+    }
+    modelLoading_ = false;
+    spinner_->stop();
+    setControlsEnabled(true);
+}
+
+void MainWindow::onDenoiseModelLoaded() {
+    const std::shared_ptr<DenoiseModel> model = denoiseModelWatcher_.result();
+    if (model && model->isReady()) {
+        if (auto step = denoiseStep()) {
+            step->setModel(model);
+        }
+        QSettings settings;
+        settings.setValue(ModelCatalog::settingsKey(ModelCategory::Denoise), pendingDenoiseFilename_);
+        settingsPage_->setActiveModel(ModelCategory::Denoise, pendingDenoiseFilename_);
+        statusLabel_->clear();
+    } else {
+        statusLabel_->setText(QStringLiteral("Could not load that model"));
+        // Qt checks the radio on click before modelSelected arrives; put it
+        // back on what QSettings still says.
+        QSettings settings;
+        settingsPage_->setActiveModel(
+            ModelCategory::Denoise,
+            settings
+                .value(ModelCatalog::settingsKey(ModelCategory::Denoise),
+                       ModelCatalog::defaultFilename(ModelCategory::Denoise))
                 .toString());
     }
     modelLoading_ = false;
