@@ -186,6 +186,60 @@ commit, no local patches. In transparent the step reorder (BackgroundRemoval -> 
 - C++ links directly against vision.cpp's native API. No FFI layer, smallest binary, fastest startup.
 - Qt Widgets, not QML/Qt Quick. Simpler and lighter, sufficient for a deliberately minimal interface.
 
+### Preview zoom & before/after compare (done)
+
+Goal: inspect results at pixel level and see what the pipeline actually changed. Implemented
+as designed: `PreviewCanvas` (`src/ui/PreviewCanvas.h/.cpp`) is the custom canvas widget that
+absorbed `updatePreview()`'s checkerboard and HiDPI logic, with the wipe and view state on
+top; `MainWindow` wires it to the pipeline results and hosts the compare controls. Geometry
+and wipe rendering are covered by `tests/test_preview_canvas.cpp` (14 cases, including
+grab-based render checks); `test_main_window.cpp` adds an integration test for the
+load-image wiring. No new dependencies, no pipeline core changes; GIF compare remains out of
+scope (below).
+
+Decisions, recorded so they survive across sessions:
+
+- **"Before" = the original image as loaded; "after" = the final pipeline result.**
+  Intermediate per-step results are not captured anywhere and capturing them would mean
+  touching the pipeline core; not wanted. Stills only — see the GIF decision below.
+- **Wipe slider is the compare presentation, on by default.** A draggable vertical split line
+  over one shared canvas: left of the line shows before, right shows after. A button under the
+  existing ✕ (top-right overlay) toggles it off (after-only, i.e. today's view) and back on.
+  The enabled state persists in QSettings like the bokeh strength; first-ever-launch default
+  is enabled. There is deliberately no A/B hold-key flip — one compare mechanism, done well.
+  `W` toggles the wipe via keyboard, matching the `F`/`1`/`+`/`-` scheme.
+- **One shared view state.** Pan/zoom applies identically to both images (same dimensions for
+  stills), so before and after stay perfectly aligned at any zoom — this is what makes
+  differences visible.
+- **Zoom interactions** (near-universal conventions, all cheap): cursor-anchored wheel zoom
+  (what's under the mouse stays under the mouse), left-drag pan, double-click toggles
+  fit ↔ 100%, `+`/`-` zoom in/out, `F` fit, `1` = 100%. A small semi-transparent overlay strip
+  at the top-left of the preview (mirroring the ✕ at top-right) shows the zoom percentage with
+  fit and 100% buttons.
+- **Rendering: smooth while shrinking to fit, nearest-neighbor at ≥200% magnification.**
+  Smooth upscaling blurs — which hides exactly the pixel differences zoom exists to show.
+  Max zoom 16× (past visual resolution on any display; bounds repaint cost).
+- **Stability across re-renders.** `resultImage_` is rewritten by bokeh slider ticks, model
+  swaps, reprocess runs, and Simple/Advanced mode switches; zoom, pan, divider position, and
+  wipe enabled state must persist through all of them (a reset per bokeh tick would make the
+  live preview unusable). A **new image load** resets everything: fit, wipe on, divider at 50%.
+- **Divider affordance:** clean vertical line with a small grip and a hover cursor change (⇔);
+  wide grab area; dragging it takes priority over pan-drag. It spans the image area only, not
+  the letterbox, and carries no "Before"/"After" text labels (self-explanatory, and unreadable
+  over transparent regions).
+- **Animated GIFs: compare disabled.** Full-resolution per-frame data is streamed and
+  discarded (only downscaled preview frames survive), so frame-synced before/after would need
+  new plumbing; zoom still works on preview frames. The wipe toggle button renders disabled
+  with a tooltip ("Compare is not available for animations") — hidden controls would flicker
+  as files are swapped.
+- **Batch runs show no compare UI.**
+- **While a still is processing** (result not ready yet), both wipe halves show the source
+  with the spinner on top as today; the wipe becomes meaningful when the result arrives.
+- **Implementation notes:** the canvas becomes a custom QWidget whose `paintEvent` absorbs
+  `updatePreview()`'s checkerboard + DPR logic; the existing overlay reposition mechanism
+  (✕, spinner) extends to the new strip and divider. Export, batch runner, and GIF encoding
+  are untouched.
+
 ### Internal architecture (pipeline steps from day one)
 
 The MVP is built as swappable pipeline steps (image in, image out) rather than a hardcoded path. That made batch processing, upscaling, and GIF support additive later instead of a rewrite.

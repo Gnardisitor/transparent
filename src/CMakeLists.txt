@@ -27,6 +27,7 @@ add_executable(transparent
   ui/MainWindow.cpp
   ui/SettingsPage.cpp
   ui/SpinnerWidget.cpp
+  ui/PreviewCanvas.cpp
   ui/Theme.cpp
   ${CMAKE_SOURCE_DIR}/resources/resources.qrc
   ${CMAKE_SOURCE_DIR}/resources/qdarkstyle.qrc

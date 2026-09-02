@@ -18,6 +18,7 @@ class BokehStep;
 class DenoiseModel;
 class DenoiseStep;
 class ModelManager;
+class PreviewCanvas;
 class QComboBox;
 class QDialog;
 class QLabel;
@@ -38,6 +39,10 @@ public:
     explicit MainWindow(std::shared_ptr<Pipeline> pipeline,
                          std::shared_ptr<ModelManager> modelManager = nullptr,
                          QWidget* parent = nullptr);
+
+    // Loads an image (or first GIF frame) into the preview and starts
+    // Simple-mode processing; the programmatic entry behind drag-and-drop.
+    void loadImage(const QString& path);
 
     // Absolute default path for the export dialog: Pictures (falling back
     // to home) plus a name derived from `sourcePath` ("<source>_cutout", or
@@ -71,6 +76,12 @@ private slots:
     // Persists the strength to QSettings; live-previews via a cheap mask
     // reblend when Bokeh is the active output step.
     void onBokehStrengthChanged(int percent);
+    // Wipe toggle (button under the ✕ / W key): applies to the canvas and
+    // persists in QSettings.
+    void onWipeToggled(bool enabled);
+    // Syncs the wipe button and zoom strip with canvas compare availability
+    // and the batch-running state.
+    void updateCompareControls();
     void onBokehPreviewReady();
 
 private:
@@ -96,7 +107,6 @@ private:
     // own output and a live strength-only reblend is valid to show.
     bool isBokehTheActiveOutputStep() const;
 
-    void loadImage(const QString& path);
     // Runs BatchRunner over a folder on a background thread; progress
     // arrives via showBatchProgress() and completion via onBatchFinished().
     void runBatch(const QString& folderPath);
@@ -105,6 +115,8 @@ private:
     // Runs the pipeline on the source (each GIF frame individually) on a
     // background thread so inference never blocks the GUI.
     void reprocess();
+    // Re-renders the preview canvas. Cheap: the canvas paints on demand;
+    // this updates its after-image and the compare-controls state.
     void updatePreview();
     void repositionOverlays();
     void setControlsEnabled(bool enabled);
@@ -141,10 +153,16 @@ private:
     // mask, which reprocess() and setModel() write on the GUI thread; this
     // flag keeps the two from overlapping.
     bool bokehPreviewInFlight_ = false;
-    QLabel* previewLabel_;
+    PreviewCanvas* previewCanvas_;
     QPushButton* clearButton_;
+    // Compare controls: wipe toggle under the ✕, zoom strip top-left. Both
+    // float over the preview canvas like the ✕ does.
+    QPushButton* wipeButton_;
+    QWidget* zoomStrip_;
+    QLabel* zoomLabel_;
     SpinnerWidget* spinner_;
     QPushButton* exportButton_;
+    bool batchRunning_ = false;
     QImage sourceImage_;
     QImage resultImage_;
     QFutureWatcher<QImage> processingWatcher_;

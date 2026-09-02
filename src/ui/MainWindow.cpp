@@ -12,6 +12,7 @@
 #include "core/VisionCppDenoiseModel.h"
 #include "core/VisionCppSegmentationModel.h"
 #include "core/VisionCppUpscaleModel.h"
+#include "ui/PreviewCanvas.h"
 #include "ui/SettingsPage.h"
 #include "ui/SpinnerWidget.h"
 
@@ -35,6 +36,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPointer>
+#include <QShortcut>
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QSettings>
@@ -51,18 +53,6 @@
 #include <optional>
 
 namespace {
-
-// Checkerboard behind the preview so removed background is visible. Drawn
-// at physical-pixel resolution with the DPR set so it stays crisp on HiDPI.
-QPixmap checkerboardPattern(qreal devicePixelRatio, int cell = 12) {
-    QPixmap pattern(cell * 2 * devicePixelRatio, cell * 2 * devicePixelRatio);
-    pattern.setDevicePixelRatio(devicePixelRatio);
-    QPainter painter(&pattern);
-    painter.fillRect(0, 0, cell * 2, cell * 2, QColor(210, 210, 210));
-    painter.fillRect(0, 0, cell, cell, QColor(160, 160, 160));
-    painter.fillRect(cell, cell, cell, cell, QColor(160, 160, 160));
-    return pattern;
-}
 
 } // namespace
 
@@ -197,19 +187,81 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
             settings.value(BokehStep::settingsKey(), BokehStep::kDefaultStrengthPercent).toInt());
     }
 
-    previewLabel_ = new QLabel(this);
-    previewLabel_->setAlignment(Qt::AlignCenter);
-    previewLabel_->setMinimumSize(400, 300);
-    previewLabel_->setFrameShape(QFrame::StyledPanel);
+    previewCanvas_ = new PreviewCanvas(this);
+    previewCanvas_->setMinimumSize(400, 300);
+    previewCanvas_->setFrameShape(QFrame::StyledPanel);
 
     // Overlays float over the preview; repositioned on resize.
-    clearButton_ = new QPushButton(QStringLiteral("✕"), previewLabel_);
+    clearButton_ = new QPushButton(QStringLiteral("✕"), previewCanvas_);
     clearButton_->setFixedSize(24, 24);
     clearButton_->setToolTip(QStringLiteral("Remove image"));
     clearButton_->setVisible(false);
     connect(clearButton_, &QPushButton::clicked, this, &MainWindow::onClearImageClicked);
 
-    spinner_ = new SpinnerWidget(previewLabel_);
+    // Wipe toggle sits directly under the ✕. Checkable: checked = compare
+    // on. State persists in QSettings ("preview/wipeEnabled"), like the
+    // bokeh strength; first-ever-launch default is enabled.
+    wipeButton_ = new QPushButton(QStringLiteral("A|B"), previewCanvas_);
+    wipeButton_->setFixedSize(24, 24);
+    wipeButton_->setCheckable(true);
+    wipeButton_->setChecked(
+        QSettings().value(QStringLiteral("preview/wipeEnabled"), true).toBool());
+    wipeButton_->setToolTip(QStringLiteral("Toggle before/after compare (W)"));
+    wipeButton_->setVisible(false);
+    connect(wipeButton_, &QPushButton::toggled, this, &MainWindow::onWipeToggled);
+
+    // Zoom strip floats at the top-left: percent readout plus fit/100%.
+    zoomStrip_ = new QWidget(previewCanvas_);
+    auto* zoomStripLayout = new QHBoxLayout(zoomStrip_);
+    zoomStripLayout->setContentsMargins(6, 2, 6, 2);
+    zoomStripLayout->setSpacing(2);
+    zoomLabel_ = new QLabel(zoomStrip_);
+    auto* fitButton = new QPushButton(QStringLiteral("Fit"), zoomStrip_);
+    auto* fullSizeButton = new QPushButton(QStringLiteral("1:1"), zoomStrip_);
+    // Legibility: the strip floats over arbitrary images, so it paints a
+    // semi-transparent dark scrim with white text (the video-player
+    // pattern) — readable over anything, no image sampling heuristics.
+    zoomStrip_->setAttribute(Qt::WA_StyledBackground, true);
+    zoomStrip_->setStyleSheet(
+        QStringLiteral("background-color: rgba(18, 18, 18, 170); border-radius: 6px;"));
+    zoomLabel_->setStyleSheet(
+        QStringLiteral("color: white; background: transparent; padding-right: 4px;"));
+    const QString stripButtonSheet = QStringLiteral(
+        "QPushButton { color: white; background: transparent; border: none;"
+        " padding: 2px 6px; border-radius: 4px; }"
+        "QPushButton:hover { background-color: rgba(255, 255, 255, 40); }");
+    for (QPushButton* button : {fitButton, fullSizeButton}) {
+        button->setFlat(true);
+        button->setStyleSheet(stripButtonSheet);
+        zoomStripLayout->addWidget(button);
+    }
+    zoomStripLayout->insertWidget(0, zoomLabel_);
+    zoomStrip_->adjustSize();
+    zoomStrip_->setVisible(false);
+    connect(fitButton, &QPushButton::clicked, previewCanvas_, &PreviewCanvas::zoomToFit);
+    connect(fullSizeButton, &QPushButton::clicked, previewCanvas_, &PreviewCanvas::zoomTo100);
+    connect(previewCanvas_, &PreviewCanvas::zoomChanged, this, [this](double zoom) {
+        zoomLabel_->setText(QString::number(qRound(zoom * 100)) + QStringLiteral("%"));
+        zoomStrip_->adjustSize();
+    });
+
+    previewCanvas_->setWipeEnabled(wipeButton_->isChecked());
+
+    // Keyboard: zoom and compare, matching the F/1/W scheme documented in
+    // the button tooltips.
+    auto addPreviewShortcut = [this](QKeySequence sequence, auto slot) {
+        auto* shortcut = new QShortcut(sequence, this);
+        connect(shortcut, &QShortcut::activated, previewCanvas_, slot);
+    };
+    addPreviewShortcut(QKeySequence(QStringLiteral("+")), &PreviewCanvas::zoomIn);
+    addPreviewShortcut(QKeySequence(QStringLiteral("=")), &PreviewCanvas::zoomIn);
+    addPreviewShortcut(QKeySequence(QStringLiteral("-")), &PreviewCanvas::zoomOut);
+    addPreviewShortcut(QKeySequence(QStringLiteral("F")), &PreviewCanvas::zoomToFit);
+    addPreviewShortcut(QKeySequence(QStringLiteral("1")), &PreviewCanvas::zoomTo100);
+    auto* wipeShortcut = new QShortcut(QKeySequence(QStringLiteral("W")), this);
+    connect(wipeShortcut, &QShortcut::activated, wipeButton_, &QPushButton::toggle);
+
+    spinner_ = new SpinnerWidget(previewCanvas_);
     spinner_->setVisible(false);
 
     // Text matches what a run would save (GIF for animated sources).
@@ -217,7 +269,7 @@ MainWindow::MainWindow(std::shared_ptr<Pipeline> pipeline, std::shared_ptr<Model
     exportButton_->setEnabled(false);
     connect(exportButton_, &QPushButton::clicked, this, &MainWindow::onExportClicked);
 
-    layout->addWidget(previewLabel_, 1);
+    layout->addWidget(previewCanvas_, 1);
     layout->addWidget(exportButton_);
 
     setCentralWidget(central);
@@ -392,9 +444,12 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
 
 void MainWindow::repositionOverlays() {
     const int margin = 8;
-    clearButton_->move(previewLabel_->width() - clearButton_->width() - margin, margin);
-    spinner_->move((previewLabel_->width() - spinner_->width()) / 2,
-                   (previewLabel_->height() - spinner_->height()) / 2);
+    clearButton_->move(previewCanvas_->width() - clearButton_->width() - margin, margin);
+    wipeButton_->move(previewCanvas_->width() - wipeButton_->width() - margin,
+                      margin + clearButton_->height() + 4);
+    zoomStrip_->move(margin, margin);
+    spinner_->move((previewCanvas_->width() - spinner_->width()) / 2,
+                   (previewCanvas_->height() - spinner_->height()) / 2);
 }
 
 void MainWindow::setControlsEnabled(bool enabled) {
@@ -467,6 +522,11 @@ void MainWindow::loadImage(const QString& path) {
     exportButton_->setText(isAnimatedGifSource_ ? QStringLiteral("Export GIF")
                                                   : QStringLiteral("Export PNG"));
 
+    previewCanvas_->setBeforeImage(sourceImage_);
+    previewCanvas_->setCompareAllowed(!isAnimatedGifSource_);
+    previewCanvas_->resetView();
+    updateCompareControls();
+
     clearButton_->setVisible(true);
     repositionOverlays();
 
@@ -517,7 +577,7 @@ void MainWindow::reprocess() {
         gifResultFile_->close();
 
         const QString sourcePath = sourceImagePath_;
-        QSize previewBounds = previewLabel_->size();
+        QSize previewBounds = previewCanvas_->size();
         if (previewBounds.isEmpty()) {
             previewBounds = QSize(400, 300);
         }
@@ -545,7 +605,7 @@ void MainWindow::reprocess() {
                         return result;
                     }
 
-                    // Preview copy: only shrink, mirroring updatePreview().
+                    // Preview copy: only shrink to the preview bounds.
                     QImage preview = processed;
                     if (preview.width() > previewBounds.width() ||
                         preview.height() > previewBounds.height()) {
@@ -790,8 +850,9 @@ void MainWindow::onClearImageClicked() {
     gifPreviewFrames_.clear();
     sourceImage_ = QImage();
     resultImage_ = QImage();
-    previewLabel_->setPixmap(QPixmap());
+    previewCanvas_->clearImages();
     clearButton_->setVisible(false);
+    updateCompareControls();
     exportButton_->setText(QStringLiteral("Export PNG"));
     exportButton_->setEnabled(false);
     statusLabel_->setText(QStringLiteral("Drop an image or a folder of images here"));
@@ -829,6 +890,8 @@ void MainWindow::runBatch(const QString& folderPath) {
 
     processing_ = true;
     setControlsEnabled(false);
+    batchRunning_ = true;
+    updateCompareControls();
     batchOutputFolder_ = outputFolder;
     statusLabel_->setText(QStringLiteral("Batch starting..."));
 
@@ -859,7 +922,9 @@ void MainWindow::showBatchProgress(int done, int total, QString fileName) {
 void MainWindow::onBatchFinished() {
     const BatchResult result = batchWatcher_.result();
     processing_ = false;
+    batchRunning_ = false;
     setControlsEnabled(true);
+    updateCompareControls();
 
     if (result.failedFiles.isEmpty()) {
         statusLabel_->setText(QStringLiteral("Batch done: %1 image(s) exported to %2")
@@ -874,32 +939,30 @@ void MainWindow::onBatchFinished() {
 }
 
 void MainWindow::updatePreview() {
-    if (resultImage_.isNull()) {
-        return;
+    previewCanvas_->setAfterImage(resultImage_);
+    updateCompareControls();
+}
+
+void MainWindow::updateCompareControls() {
+    const bool hasImage = !sourceImage_.isNull();
+    const bool available = previewCanvas_->isCompareAvailable();
+    wipeButton_->setEnabled(available);
+    // Batch runs save directly to the output folder; no compare UI there.
+    wipeButton_->setVisible(hasImage && !batchRunning_);
+    zoomStrip_->setVisible(hasImage && !batchRunning_);
+    if (available) {
+        wipeButton_->setToolTip(QStringLiteral("Toggle before/after compare (W)"));
+    } else if (isAnimatedGifSource_) {
+        wipeButton_->setToolTip(QStringLiteral("Compare is not available for animations"));
+    } else {
+        wipeButton_->setToolTip(QStringLiteral("Compare needs a loaded image"));
     }
+}
 
-    // Canvas at physical resolution with the DPR set, for crisp HiDPI.
-    const qreal dpr = devicePixelRatioF();
-    const QSize viewSize = previewLabel_->size();
-    QPixmap canvas(viewSize * dpr);
-    canvas.setDevicePixelRatio(dpr);
-    QPainter painter(&canvas);
-    painter.drawTiledPixmap(canvas.rect(), checkerboardPattern(dpr));
-
-    // Only shrink to fit; smaller images render at 1:1.
-    QSize displaySize = resultImage_.size();
-    if (displaySize.width() > viewSize.width() || displaySize.height() > viewSize.height()) {
-        displaySize.scale(viewSize, Qt::KeepAspectRatio);
-    }
-    const QPoint offset((viewSize.width() - displaySize.width()) / 2,
-                         (viewSize.height() - displaySize.height()) / 2);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform,
-                          displaySize != resultImage_.size());
-    painter.drawImage(QRect(offset, displaySize), resultImage_);
-    painter.end();
-
-    previewLabel_->setPixmap(canvas);
-    repositionOverlays();
+void MainWindow::onWipeToggled(bool enabled) {
+    previewCanvas_->setWipeEnabled(enabled);
+    QSettings settings;
+    settings.setValue(QStringLiteral("preview/wipeEnabled"), enabled);
 }
 
 QString MainWindow::defaultExportPath(const QString& sourcePath, const QString& suffix) {

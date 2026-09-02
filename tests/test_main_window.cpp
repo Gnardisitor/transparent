@@ -1,11 +1,13 @@
 #include <QtTest>
 
+#include <QStandardPaths>
+
 #include <QRadioButton>
 #include <QSettings>
-#include <QStandardPaths>
 
 #include "core/ModelCatalog.h"
 #include "core/ModelManager.h"
+#include "ui/PreviewCanvas.h"
 #include "core/Pipeline.h"
 #include "core/PipelineStep.h"
 #include "ui/MainWindow.h"
@@ -37,6 +39,8 @@ private slots:
     void initTestCase();
     void constructionLeavesDefaultStepEnabledDespiteAdvancedPagePopulation();
     void everyModelCategoryStartsWithItsDefaultSelected();
+    void loadImageWiresCompareAndResetsTheView();
+    void zoomStripHasAScrimSoItStaysLegibleOverAnyImage();
     void defaultExportPathIsAbsoluteAndDerivedFromTheSourceName();
     void defaultExportPathFallsBackToOutputWithoutASource();
 };
@@ -111,6 +115,71 @@ void TestMainWindow::everyModelCategoryStartsWithItsDefaultSelected() {
                 .toString();
         QCOMPARE(radio->isChecked(), active == info.filename);
     }
+}
+
+void TestMainWindow::loadImageWiresCompareAndResetsTheView() {
+    // Integration check for the preview wiring: loading a still image feeds
+    // both canvas images, enables compare, and resets the view (fit, divider
+    // centered). The pipeline's steps are GPU-free named pass-throughs, so
+    // the processed result equals the source.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QImage image(300, 200, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    const QString path = dir.filePath(QStringLiteral("photo.png"));
+    QVERIFY(image.save(path));
+
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Background Removal")));
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Denoise")));
+
+    MainWindow window(pipeline, std::make_shared<ModelManager>(QString()));
+    window.loadImage(path);
+
+    auto* canvas = window.findChild<PreviewCanvas*>();
+    QVERIFY(canvas);
+
+    // Simple mode reprocesses automatically: compare only becomes available
+    // once the worker result lands in the canvas as the after image.
+    QTRY_VERIFY(canvas->isCompareAvailable());
+    QVERIFY(canvas->isWipeEnabled());
+    QCOMPARE(canvas->dividerPosition(), 0.5);
+    QCOMPARE(canvas->zoom(), canvas->fitZoom());
+}
+
+void TestMainWindow::zoomStripHasAScrimSoItStaysLegibleOverAnyImage() {
+    // The zoom strip floats over the image; without a backdrop its flat text
+    // is unreadable over bright photos. It must paint a dark scrim so it
+    // stays legible regardless of what is beneath it.
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QImage image(300, 200, QImage::Format_ARGB32);
+    image.fill(Qt::red);
+    const QString path = dir.filePath(QStringLiteral("photo.png"));
+    QVERIFY(image.save(path));
+
+    auto pipeline = std::make_shared<Pipeline>();
+    pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Background Removal")));
+
+    MainWindow window(pipeline, std::make_shared<ModelManager>(QString()));
+    auto* canvas = window.findChild<PreviewCanvas*>();
+    QVERIFY(canvas);
+    canvas->resize(400, 300);
+
+    window.loadImage(path);
+    QTRY_VERIFY(canvas->isCompareAvailable());
+
+    // Image is 300x200 at 1:1, centered: x=50..350, y=50..250. The strip sits
+    // at (8,8) over the checkerboard; (380,12) is plain checkerboard.
+    const QImage rendered = canvas->grab().toImage().convertToFormat(QImage::Format_ARGB32);
+    const QColor inside = rendered.pixelColor(12, 12);
+    const QColor outside = rendered.pixelColor(380, 12);
+    const int insideBrightness = (inside.red() + inside.green() + inside.blue()) / 3;
+    const int outsideBrightness = (outside.red() + outside.green() + outside.blue()) / 3;
+    // The scrim darkens whatever is beneath (checkerboard is 160/210 gray).
+    QVERIFY2(insideBrightness < 120,
+             qPrintable(QStringLiteral("strip too bright: %1").arg(insideBrightness)));
+    QVERIFY(outsideBrightness > insideBrightness);
 }
 
 void TestMainWindow::defaultExportPathIsAbsoluteAndDerivedFromTheSourceName() {
