@@ -136,14 +136,11 @@ ctest --test-dir build
 .\build\transparent.exe
 ```
 
-7. Make a portable version:
+7. Build the installer:
 
 ```powershell
-mkdir portable\bin
-copy build\transparent.exe portable\bin\
-C:\Qt\6.8.3\msvc2022_64\bin\windeployqt.exe --release --compiler-runtime portable\bin\transparent.exe
-copy build\vulkan-1.dll portable\bin\
-xcopy /E /I build\models portable\share\transparent\models\
+winget install -e --id JRSoftware.InnoSetup
+powershell -ExecutionPolicy Bypass -File packaging\build-installer.ps1
 ```
 
 ## Models
@@ -151,7 +148,7 @@ xcopy /E /I build\models portable\share\transparent\models\
 Three defaults are downloaded and checksum-verified at configure time, and copied into the app's data directory on first launch, so a fresh install works offline:
 
 | Category | Model | License | Source |
-|---|---|---|---|
+| - | - | - | - |
 | Background removal | [BiRefNet-lite](https://github.com/zhengpeng7/birefnet) | MIT | [Acly/BiRefNet-GGUF](https://huggingface.co/Acly/BiRefNet-GGUF) |
 | Denoise | [SCUNet](https://github.com/cszn/SCUNet) color real GAN | Apache-2.0 | [transparent-models](https://forge.db-serve.com/dbajan/transparent-models) |
 | Upscale | Real-ESRGAN `foolhardy_Remacri` | BSD-3-Clause | [Acly/Real-ESRGAN-GGUF](https://huggingface.co/Acly/Real-ESRGAN-GGUF) |

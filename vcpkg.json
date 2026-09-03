@@ -1,6 +1,6 @@
 {
   "name": "transparent",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Local, GPU-accelerated background removal (and later upscaling), Linux-first",
   "dependencies": [
     "vulkan",
