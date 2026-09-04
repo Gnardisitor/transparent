@@ -106,9 +106,6 @@ jobs:
           path: ~/.cache/vcpkg/archives
           key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
 
-      - name: Put glslc (vcpkg shaderc) on PATH
-        run: echo "${{ github.workspace }}/build/vcpkg_installed/x64-linux/tools/shaderc" >> "$GITHUB_PATH"
-
       - name: Configure
         run: |
           cmake --preset default -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
@@ -146,7 +143,6 @@ jobs:
     runs-on: windows-latest
     env:
       TAG: ${{ needs.guard.outputs.tag }}
-      VCPKG_BUILD_TYPE: release
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -154,7 +150,7 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Enable long paths (vcpkg / vision.cpp source trees exceed MAX_PATH)
+      - name: Enable long paths
         run: git config --global core.longpaths true
 
       - name: Setup MSVC
@@ -180,6 +176,26 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      - name: Cache Vulkan SDK
+        uses: actions/cache@v4
+        id: vulkan-sdk-cache
+        with:
+          path: C:\VulkanSDK
+          key: vulkan-sdk-windows
+
+      - name: Install Vulkan SDK
+        if: steps.vulkan-sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          curl.exe -sL -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
+          Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList "/S" -Wait
+
+      - name: Put glslc (Vulkan SDK) on PATH
+        shell: pwsh
+        run: |
+          $sdk = (Get-ChildItem C:\VulkanSDK -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
+          Add-Content $env:GITHUB_ENV "PATH=$sdk\Bin;$env:PATH"
+
       - name: Cache vcpkg downloads
         uses: actions/cache@v4
         with:
@@ -192,10 +208,6 @@ jobs:
         with:
           path: ~\AppData\Local\vcpkg\archives
           key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
-
-      - name: Put glslc (vcpkg shaderc) on PATH
-        shell: pwsh
-        run: Add-Content $env:GITHUB_ENV "PATH=$pwd\build\vcpkg_installed\x64-windows-static-md\tools\shaderc;$env:PATH"
 
       - name: Build and run tests
         shell: pwsh
@@ -234,8 +246,8 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Install MoltenVK
-        run: brew install molten-vk
+      - name: Install MoltenVK and shaderc
+        run: brew install molten-vk shaderc
 
       - name: Cache Qt
         uses: actions/cache@v4
@@ -265,9 +277,6 @@ jobs:
           path: ~/.cache/vcpkg/archives
           key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-archives-${{ runner.os }}-
-
-      - name: Put glslc on PATH
-        run: echo "${{ github.workspace }}/build/vcpkg_installed/arm64-osx/tools/shaderc" >> "$GITHUB_PATH"
 
       - name: Build bundle, tests and DMG
         run: ./packaging/build-macos.sh

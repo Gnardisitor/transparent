@@ -156,8 +156,8 @@ powershell -ExecutionPolicy Bypass -File packaging\build-installer.ps1
 ### macOS (Apple Silicon only)
 
 Vulkan GPU acceleration runs through MoltenVK, fetched from Homebrew. The
-Vulkan loader, headers, and the glslc shader compiler come from the vendored
-vcpkg. Qt 6 is installed manually (aqtinstall) or via the Qt online installer.
+Vulkan loader and headers come from the vendored vcpkg, and the glslc shader
+compiler from Homebrew's shaderc. Qt 6 is installed manually (aqtinstall) or via the Qt online installer.
 
 1. Install system dependencies:
 

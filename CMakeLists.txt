@@ -27,10 +27,6 @@ add_compile_definitions(VISP_STATIC_DEFINE)
 
 option(TRANSPARENT_BUILD_TESTS "Build unit tests" ON)
 
-# shaderc ships the glslc binary that ggml-vulkan needs at build time
-# (found at <vcpkg_installed>/<triplet>/tools/shaderc/glslc). It supplies the
-# shader compiler on all three platforms, with no system Vulkan SDK.
-
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(VISP_VULKAN ON CACHE BOOL "" FORCE)
 set(VISP_TESTS OFF CACHE BOOL "" FORCE)

@@ -71,7 +71,9 @@ endif()
 # AppImage packaging (packaging/build-appimage.sh) installs into an AppDir
 # using these same rules, following freedesktop's hicolor icon theme
 # convention so linuxdeploy picks the icon up automatically.
-install(TARGETS transparent RUNTIME DESTINATION bin)
+# BUNDLE covers macOS: the .app goes to the prefix root there (cmake --install
+# is not used by packaging/build-macos.sh, but the rule must stay valid).
+install(TARGETS transparent RUNTIME DESTINATION bin BUNDLE DESTINATION .)
 install(FILES ${CMAKE_SOURCE_DIR}/packaging/transparent.desktop
   DESTINATION share/applications)
 install(FILES ${CMAKE_SOURCE_DIR}/resources/icon.png
