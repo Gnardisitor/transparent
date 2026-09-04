@@ -5,6 +5,7 @@
   "dependencies": [
     "vulkan",
     "vulkan-headers",
+    "shaderc",
     "giflib"
   ]
 }

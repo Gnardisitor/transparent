@@ -1,3 +1,4 @@
+#include "core/AppIdentity.h"
 #include "core/BackgroundRemovalStep.h"
 #include "core/BokehStep.h"
 #include "core/DenoiseStep.h"
@@ -9,7 +10,6 @@
 #include "core/VisionCppSegmentationModel.h"
 #include "core/VisionCppUpscaleModel.h"
 #include "ui/MainWindow.h"
-#include "ui/Theme.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -37,9 +37,8 @@ QString bundledModelsDefaultsDir() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    QApplication::setApplicationName(QStringLiteral("transparent"));
+    AppIdentity::init();
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/transparent.png")));
-    Theme::apply(app);
 
     QNetworkProxyFactory::setUseSystemConfiguration(true);
 

@@ -49,12 +49,6 @@ jobs:
           path: ~/.cache/vcpkg/archives
           key: vcpkg-archives-${{ hashFiles('vcpkg.json') }}
 
-      - name: Cache FetchContent sources
-        uses: actions/cache@v4
-        with:
-          path: build/_deps/visioncpp-src
-          key: fetchcontent-visioncpp-${{ hashFiles('CMakeLists.txt') }}
-
       - name: Configure
         run: |
           cmake --preset default \

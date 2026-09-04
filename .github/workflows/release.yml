@@ -1,0 +1,327 @@
+# Release pipeline for the GitHub mirror. Canonical CI/CD lives on the
+# project's Forgejo (.forgejo/workflows). This workflow exists on GitHub,
+# where the repository is push-mirrored, and publishes release artifacts for
+# mirror users: Linux AppImage (+zsync with GitHub update URLs), Windows
+# installer, macOS (Apple Silicon) DMG, SHA256SUMS.
+#
+# Triggered by version tags (x.y.z, mirrored from Forgejo) or manually
+# (workflow_dispatch) for testing a tag without cutting a release.
+#
+# Everything is unsigned. See README for the macOS first-launch workaround.
+name: Release
+
+on:
+  push:
+    tags: '*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build and release (e.g. 0.2.1)
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Guard (latest tag, matches CMake version)
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: echo "tag=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Check tag is newest and matches project version
+        id: check
+        run: |
+          set -euo pipefail
+          tag="${{ steps.tag.outputs.tag }}"
+
+          # First mirror sync pushes every historical tag at once; only build
+          # the newest one so old versions don't get releases on GitHub.
+          latest="$(git tag --list '*.*.*' --sort=-v:refname | head -n1)"
+          if [[ "${tag}" != "${latest}" ]]; then
+            echo "Tag ${tag} is not the newest (${latest}); skipping."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The tag must match project(VERSION) in CMakeLists.txt, which drives
+          # the installer filename and bundle version.
+          cmake_version="$(sed -n 's/^project(transparent VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          if [[ "${tag}" != "${cmake_version}" ]]; then
+            echo "::error::Tag ${tag} does not match CMakeLists.txt version ${cmake_version}. Bump project(VERSION) and re-tag."
+            exit 1
+          fi
+          echo "build=true" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux (AppImage)
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.guard.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libvulkan-dev curl zip unzip tar file zsync \
+            breeze plasma-integration qt6-wayland
+
+      - name: Cache Qt
+        uses: actions/cache@v4
+        id: qt-cache
+        with:
+          path: /opt/qt
+          key: qt-6.8.3-linux-gcc_64
+
+      - name: Install Qt 6.8.3 (aqtinstall)
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install aqtinstall
+          aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O /opt/qt
+      - name: Put Qt on PATH
+        run: echo "/opt/qt/6.8.3/gcc_64/bin" >> "$GITHUB_PATH"
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@v4
+        with:
+          path: vcpkg/downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-downloads-${{ runner.os }}-
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Put glslc (vcpkg shaderc) on PATH
+        run: echo "${{ github.workspace }}/build/vcpkg_installed/x64-linux/tools/shaderc" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: cmake --preset default
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build AppImage
+        run: packaging/build-appimage.sh
+        env:
+          APPIMAGE_VERSION: ${{ env.TAG }}
+          # Embedded so AppImageUpdate / Gear Lever can check for updates.
+          # GitHub resolves /releases/latest/download/ to the newest release.
+          APPIMAGE_UPDATE_INFO: zsync|https://github.com/${{ github.repository }}/releases/latest/download/Transparent-x86_64.AppImage.zsync
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p dist
+          # Versioned AppImage is the human-facing download
+          cp build/Transparent-*.AppImage "dist/Transparent-${TAG}-x86_64.AppImage"
+          # The zsync keeps a stable name so the URL embedded in the AppImage
+          # stays valid across releases. Its target URL points at this
+          # release's versioned AppImage. Forgejo releases carry their own
+          # Forgejo-flavored copy; these are separate builds.
+          zsyncmake -u "https://github.com/${{ github.repository }}/releases/download/${TAG}/Transparent-${TAG}-x86_64.AppImage" \
+            -o "dist/Transparent-${TAG}-x86_64.AppImage.zsync" \
+            "dist/Transparent-${TAG}-x86_64.AppImage"
+          mv "dist/Transparent-${TAG}-x86_64.AppImage.zsync" dist/Transparent-x86_64.AppImage.zsync
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-assets
+          path: dist/*
+
+  windows:
+    name: Windows (installer)
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
+    runs-on: windows-latest
+    env:
+      TAG: ${{ needs.guard.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Enable long paths (vcpkg / vision.cpp source trees exceed MAX_PATH)
+        run: git config --global core.longpaths true
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache Qt
+        uses: actions/cache@v4
+        id: qt-cache
+        with:
+          path: C:\Qt
+          key: qt-6.8.3-windows-msvc2022_64
+
+      - name: Install Qt 6.8.3 (aqtinstall)
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          pip install aqtinstall
+          aqt install-qt windows desktop 6.8.3 win64_msvc2022_64 -O C:\Qt
+      - name: Put Qt on PATH
+        shell: pwsh
+        run: Add-Content $env:GITHUB_PATH "C:\Qt\6.8.3\msvc2022_64\bin"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@v4
+        with:
+          path: vcpkg\downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-downloads-${{ runner.os }}-
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+
+      - name: Put glslc (vcpkg shaderc) on PATH
+        shell: pwsh
+        run: Add-Content $env:GITHUB_ENV "PATH=$pwd\build\vcpkg_installed\x64-windows-static-md\tools\shaderc;$env:PATH"
+
+      - name: Build and run tests
+        shell: pwsh
+        run: |
+          cmake --preset windows
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      - name: Build installer
+        shell: pwsh
+        run: powershell -File packaging\build-installer.ps1
+
+      - name: Rename installer to release name
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Move-Item "build\dist\Transparent-*-x64-setup.exe" "dist\Transparent-${{ env.TAG }}-windows-x64-setup.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: dist/*
+
+  macos:
+    name: macOS (Apple Silicon DMG)
+    needs: guard
+    if: needs.guard.outputs.build == 'true'
+    runs-on: macos-15
+    env:
+      TAG: ${{ needs.guard.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install MoltenVK (brew)
+        run: brew install molten-vk
+
+      - name: Cache Qt
+        uses: actions/cache@v4
+        id: qt-cache
+        with:
+          path: /opt/qt
+          key: qt-6.8.3-macos-clang_64
+
+      - name: Install Qt 6.8.3 (aqtinstall)
+        if: steps.qt-cache.outputs.cache-hit != 'true'
+        run: |
+          pip install aqtinstall
+          aqt install-qt mac desktop 6.8.3 clang_64 -O /opt/qt
+      - name: Put Qt on PATH
+        run: echo "/opt/qt/6.8.3/clang_64/bin" >> "$GITHUB_PATH"
+
+      - name: Cache vcpkg downloads
+        uses: actions/cache@v4
+        with:
+          path: vcpkg/downloads
+          key: vcpkg-downloads-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-downloads-${{ runner.os }}-
+
+      - name: Cache vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-archives-${{ runner.os }}-
+
+      - name: Put glslc (vcpkg shaderc) on PATH
+        run: echo "${{ github.workspace }}/build/vcpkg_installed/arm64-osx/tools/shaderc" >> "$GITHUB_PATH"
+
+      - name: Build bundle, tests and DMG
+        run: ./packaging/build-macos.sh
+        env:
+          APPIMAGE_VERSION: ${{ env.TAG }}
+
+      - name: Run tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-assets
+          path: build/dist/*
+
+  release:
+    name: Publish GitHub release
+    needs: [guard, linux, windows, macos]
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.guard.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Prepare release assets
+        run: |
+          # download-artifact nests each artifact in its own directory
+          mkdir -p release
+          find dist -type f -exec mv {} release/ \;
+          cd release
+          sha256sum * > SHA256SUMS
+          ls -la
+
+      - name: Create release
+        run: gh release create "$TAG" --title "Transparent $TAG" --notes "" release/*

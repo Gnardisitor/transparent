@@ -6,7 +6,8 @@ Local, GPU-accelerated image editing. Background removal, denoising, upscaling, 
 
 Everything below works end to end and is covered by CI.
 
-- Vulkan GPU acceleration with CPU fallback
+- Vulkan GPU acceleration with CPU fallback (on macOS via MoltenVK's
+  Vulkan-over-Metal translation)
 - Background removal via BiRefNet-lite
 - Denoising via SCUNet
 - 4x upscaling via Real-ESRGAN
@@ -17,7 +18,22 @@ Everything below works end to end and is covered by CI.
 - Advanced mode for running several in any order
 - Single images, batch folders, and animated GIF in and out
 
-Inference runs via [vision.cpp](https://github.com/Acly/vision.cpp), built from [this fork](https://forge.db-serve.com/dbajan/vision.cpp) which adds the SCUNet architecture. GIF encoding uses [giflib](http://giflib.sourceforge.net/) plus a small built-in color quantizer.
+Inference runs via [vision.cpp](https://github.com/Acly/vision.cpp), vendored
+as a pinned submodule from [this fork](https://forge.db-serve.com/dbajan/vision.cpp)
+which adds the SCUNet architecture. GIF encoding uses [giflib](http://giflib.sourceforge.net/)
+plus a small built-in color quantizer.
+
+## Releases
+
+Binaries for Linux (AppImage), Windows (installer), and macOS (Apple Silicon
+DMG) are published on the [GitHub mirror](https://github.com/dbajan/transparent)
+and built by CI from a version tag. All artifacts are unsigned: SmartScreen
+may warn on first run on Windows, and on macOS, right-click the app and
+choose Open (or `xattr -d com.apple.quarantine /Applications/Transparent.app`).
+
+macOS builds are Apple Silicon only. GPU acceleration there runs on Vulkan
+through MoltenVK, which translates to Metal. Canonical CI and releases live
+on Forgejo; GitHub only hosts the release binaries.
 
 ## Building
 
@@ -58,7 +74,7 @@ sudo pacman -S --needed base-devel cmake ninja git qt6-base shaderc
 ```bash
 git clone https://forge.db-serve.com/dbajan/transparent.git
 cd transparent
-git submodule update --init
+git submodule update --init --recursive
 ```
 
 3. Configure and build:
@@ -141,6 +157,40 @@ ctest --test-dir build
 ```powershell
 winget install -e --id JRSoftware.InnoSetup
 powershell -ExecutionPolicy Bypass -File packaging\build-installer.ps1
+```
+
+### macOS (Apple Silicon only)
+
+Vulkan GPU acceleration runs through MoltenVK, fetched from Homebrew. The
+Vulkan loader, headers, and the glslc shader compiler come from the vendored
+vcpkg. Qt 6 is installed manually (aqtinstall) or via the Qt online installer.
+
+1. Install system dependencies:
+
+```bash
+brew install cmake ninja molten-vk
+pip install aqtinstall
+aqt install-qt mac desktop 6.8.3 clang_64 -O /opt/qt
+export PATH="/opt/qt/6.8.3/clang_64/bin:$PATH"
+```
+
+2. Clone the repository and init submodules (see Linux section).
+
+3. Configure and build (deploys into a runnable app bundle):
+
+```bash
+cmake --preset default \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+cmake --build build
+./build/transparent.app/Contents/MacOS/transparent
+```
+
+4. Package into a DMG (ad-hoc signed; see Releases above for the first-launch
+workaround):
+
+```bash
+./packaging/build-macos.sh
 ```
 
 ## Models
