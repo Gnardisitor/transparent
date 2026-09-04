@@ -22,6 +22,19 @@
       }
     },
     {
+      "name": "macos",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0"
+      }
+    },
+    {
       "name": "windows",
       "inherits": "base",
       "condition": {
@@ -38,6 +51,10 @@
     {
       "name": "default",
       "configurePreset": "default"
+    },
+    {
+      "name": "macos",
+      "configurePreset": "macos"
     },
     {
       "name": "windows",

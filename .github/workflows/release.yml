@@ -1,13 +1,5 @@
-# Release pipeline for the GitHub mirror. Canonical CI/CD lives on the
-# project's Forgejo (.forgejo/workflows). This workflow exists on GitHub,
-# where the repository is push-mirrored, and publishes release artifacts for
-# mirror users: Linux AppImage (+zsync with GitHub update URLs), Windows
-# installer, macOS (Apple Silicon) DMG, SHA256SUMS.
-#
-# Triggered by version tags (x.y.z, mirrored from Forgejo) or manually
-# (workflow_dispatch) for testing a tag without cutting a release.
-#
-# Everything is unsigned. See README for the macOS first-launch workaround.
+# Release pipeline for the GitHub mirror for multi-platform builds.
+# Canonical CI/CD lives on the project's Forgejo (.forgejo/workflows).
 name: Release
 
 on:
@@ -16,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing version tag to build and release (e.g. 0.2.1)
+        description: Existing version tag to build and release (e.g. 0.1.0)
         required: true
 
 permissions:
@@ -50,8 +42,7 @@ jobs:
           set -euo pipefail
           tag="${{ steps.tag.outputs.tag }}"
 
-          # First mirror sync pushes every historical tag at once; only build
-          # the newest one so old versions don't get releases on GitHub.
+          # Only build latest tag
           latest="$(git tag --list '*.*.*' --sort=-v:refname | head -n1)"
           if [[ "${tag}" != "${latest}" ]]; then
             echo "Tag ${tag} is not the newest (${latest}); skipping."
@@ -59,8 +50,7 @@ jobs:
             exit 0
           fi
 
-          # The tag must match project(VERSION) in CMakeLists.txt, which drives
-          # the installer filename and bundle version.
+          # Make sure tag matches CMake project version
           cmake_version="$(sed -n 's/^project(transparent VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           if [[ "${tag}" != "${cmake_version}" ]]; then
             echo "::error::Tag ${tag} does not match CMakeLists.txt version ${cmake_version}. Bump project(VERSION) and re-tag."
@@ -73,9 +63,16 @@ jobs:
     needs: guard
     if: needs.guard.outputs.build == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: debian:trixie
     env:
       TAG: ${{ needs.guard.outputs.tag }}
     steps:
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -84,28 +81,17 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential cmake ninja-build pkg-config \
-            libvulkan-dev curl zip unzip tar file zsync \
-            breeze plasma-integration qt6-wayland \
-            libgl1-mesa-dev libglx-dev libegl1-mesa-dev \
-            libfontconfig1-dev libxkbcommon-dev libdbus-1-dev
+          apt-get update
+          apt-get install -y \
+            build-essential cmake ninja-build qt6-base-dev qt6-base-dev-tools libvulkan-dev glslang-tools glslc \
+            breeze plasma-integration qt6-wayland pkg-config curl zip unzip tar ccache file zsync
 
-      - name: Cache Qt
+      - name: Cache ccache
         uses: actions/cache@v4
-        id: qt-cache
         with:
-          path: ~/qt
-          key: qt-6.8.3-linux-gcc_64
-
-      - name: Install Qt 6.8.3 (aqtinstall)
-        if: steps.qt-cache.outputs.cache-hit != 'true'
-        run: |
-          pip install aqtinstall
-          aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O "$HOME/qt"
-      - name: Put Qt on PATH
-        run: echo "$HOME/qt/6.8.3/gcc_64/bin" >> "$GITHUB_PATH"
+          path: ~/.cache/ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
 
       - name: Cache vcpkg downloads
         uses: actions/cache@v4
@@ -124,7 +110,8 @@ jobs:
         run: echo "${{ github.workspace }}/build/vcpkg_installed/x64-linux/tools/shaderc" >> "$GITHUB_PATH"
 
       - name: Configure
-        run: cmake --preset default
+        run: |
+          cmake --preset default -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
         run: cmake --build build
@@ -136,22 +123,14 @@ jobs:
         run: packaging/build-appimage.sh
         env:
           APPIMAGE_VERSION: ${{ env.TAG }}
-          # Embedded so AppImageUpdate / Gear Lever can check for updates.
-          # GitHub resolves /releases/latest/download/ to the newest release.
           APPIMAGE_UPDATE_INFO: zsync|https://github.com/${{ github.repository }}/releases/latest/download/Transparent-x86_64.AppImage.zsync
 
       - name: Prepare release assets
         run: |
           mkdir -p dist
-          # Versioned AppImage is the human-facing download
           cp build/Transparent-*.AppImage "dist/Transparent-${TAG}-x86_64.AppImage"
-          # The zsync keeps a stable name so the URL embedded in the AppImage
-          # stays valid across releases. Its target URL points at this
-          # release's versioned AppImage. Forgejo releases carry their own
-          # Forgejo-flavored copy; these are separate builds.
           zsyncmake -u "https://github.com/${{ github.repository }}/releases/download/${TAG}/Transparent-${TAG}-x86_64.AppImage" \
-            -o "dist/Transparent-${TAG}-x86_64.AppImage.zsync" \
-            "dist/Transparent-${TAG}-x86_64.AppImage"
+            -o "dist/Transparent-${TAG}-x86_64.AppImage.zsync" "dist/Transparent-${TAG}-x86_64.AppImage"
           mv "dist/Transparent-${TAG}-x86_64.AppImage.zsync" dist/Transparent-x86_64.AppImage.zsync
 
       - name: Upload artifact
@@ -167,8 +146,6 @@ jobs:
     runs-on: windows-latest
     env:
       TAG: ${{ needs.guard.outputs.tag }}
-      # The app never links debug builds, and vcpkg builds debug+release on
-      # Windows by default. Halves the dependency build time.
       VCPKG_BUILD_TYPE: release
     steps:
       - name: Checkout
@@ -190,7 +167,7 @@ jobs:
           path: C:\Qt
           key: qt-6.8.3-windows-msvc2022_64
 
-      - name: Install Qt 6.8.3 (aqtinstall)
+      - name: Install Qt 6.8.3
         if: steps.qt-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
@@ -231,7 +208,7 @@ jobs:
         shell: pwsh
         run: powershell -File packaging\build-installer.ps1
 
-      - name: Rename installer to release name
+      - name: Rename installer
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -257,7 +234,7 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Install MoltenVK (brew)
+      - name: Install MoltenVK
         run: brew install molten-vk
 
       - name: Cache Qt
@@ -267,7 +244,7 @@ jobs:
           path: ~/qt
           key: qt-6.8.3-macos-clang_64
 
-      - name: Install Qt 6.8.3 (aqtinstall)
+      - name: Install Qt 6.8.3
         if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
           pip install aqtinstall
@@ -289,7 +266,7 @@ jobs:
           key: vcpkg-archives-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: vcpkg-archives-${{ runner.os }}-
 
-      - name: Put glslc (vcpkg shaderc) on PATH
+      - name: Put glslc on PATH
         run: echo "${{ github.workspace }}/build/vcpkg_installed/arm64-osx/tools/shaderc" >> "$GITHUB_PATH"
 
       - name: Build bundle, tests and DMG
@@ -321,7 +298,6 @@ jobs:
 
       - name: Prepare release assets
         run: |
-          # download-artifact nests each artifact in its own directory
           mkdir -p release
           find dist -type f -exec mv {} release/ \;
           cd release

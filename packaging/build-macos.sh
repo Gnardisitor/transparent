@@ -27,7 +27,6 @@ app="${build_dir}/Transparent.app"
 qt_bin="${QT_BIN:-$HOME/qt/6.8.3/macos/bin}"
 moltenvk_lib="${MOLTENVK_LIB:-$(brew --prefix)/lib}"
 arch="arm64"
-os_min="12.0"
 
 # Icon: generated on the fly on macOS (sips/iconutil) if not committed yet.
 if [[ ! -f "${repo_root}/resources/icon.icns" ]]; then
@@ -35,9 +34,7 @@ if [[ ! -f "${repo_root}/resources/icon.icns" ]]; then
 fi
 
 if [[ ! -d "${build_dir}" || ! -f "${build_dir}/build.ninja" ]]; then
-  cmake --preset default \
-    -DCMAKE_OSX_ARCHITECTURES="${arch}" \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET="${os_min}"
+  cmake --preset macos
 fi
 cmake --build "${build_dir}"
 

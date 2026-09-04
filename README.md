@@ -25,15 +25,9 @@ plus a small built-in color quantizer.
 
 ## Releases
 
-Binaries for Linux (AppImage), Windows (installer), and macOS (Apple Silicon
+Binaries for Windows (installer), Linux (AppImage), and macOS (Apple Silicon
 DMG) are published on the [GitHub mirror](https://github.com/dbajan/transparent)
-and built by CI from a version tag. All artifacts are unsigned: SmartScreen
-may warn on first run on Windows, and on macOS, right-click the app and
-choose Open (or `xattr -d com.apple.quarantine /Applications/Transparent.app`).
-
-macOS builds are Apple Silicon only. GPU acceleration there runs on Vulkan
-through MoltenVK, which translates to Metal. Canonical CI and releases live
-on Forgejo; GitHub only hosts the release binaries.
+and built by CI from a version tag. All artifacts are unsigned.
 
 ## Building
 
@@ -179,9 +173,7 @@ export PATH="$HOME/qt/6.8.3/macos/bin:$PATH"
 3. Configure and build (deploys into a runnable app bundle):
 
 ```bash
-cmake --preset default \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+cmake --preset macos
 cmake --build build
 ./build/transparent.app/Contents/MacOS/transparent
 ```
