@@ -53,7 +53,7 @@ jobs:
           # Make sure tag matches CMake project version
           cmake_version="$(sed -n 's/^project(transparent VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           if [[ "${tag}" != "${cmake_version}" ]]; then
-            echo "::error::Tag ${tag} does not match CMakeLists.txt version ${cmake_version}. Bump project(VERSION) and re-tag."
+            echo "::error::Tag ${tag} does not match CMakeLists.txt version ${cmake_version}."
             exit 1
           fi
           echo "build=true" >> "$GITHUB_OUTPUT"
@@ -190,7 +190,7 @@ jobs:
           Write-Host "Downloading Vulkan SDK 1.4.357.0"
           curl.exe --fail --retry 3 -L -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/1.4.357.0/windows/vulkan-sdk.exe"
           if (-not (Test-Path "$env:RUNNER_TEMP\vulkan-sdk.exe")) { throw "SDK download failed" }
-          Write-Host "Installing (silent, takes a few minutes)..."
+          Write-Host "Installing."
           Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList "/S" -Wait
           if (-not (Test-Path "C:\VulkanSDK")) { throw "SDK installer ran but C:\VulkanSDK was not created" }
           Write-Host "Vulkan SDK installed"
@@ -244,9 +244,7 @@ jobs:
     runs-on: macos-15
     env:
       TAG: ${{ needs.guard.outputs.tag }}
-      # Build vcpkg libs against the same minimum macOS version as the app,
-      # otherwise ld warns that dependency objects target a newer macOS.
-      VCPKG_OSX_DEPLOYMENT_TARGET: "13.3"
+      VCPKG_OSX_DEPLOYMENT_TARGET: "15.0"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
