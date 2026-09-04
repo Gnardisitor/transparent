@@ -163,7 +163,7 @@ jobs:
           path: C:\Qt
           key: qt-6.8.3-windows-msvc2022_64
 
-      - name: Install Qt 6.8.3
+      - name: Install Qt
         if: steps.qt-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
@@ -176,7 +176,7 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
-      - name: Install Vulkan SDK (extract only)
+      - name: Install Vulkan SDK
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.357.0
@@ -243,7 +243,7 @@ jobs:
           path: ~/qt
           key: qt-6.8.3-macos-clang_64
 
-      - name: Install Qt 6.8.3
+      - name: Install Qt
         if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
           pip install aqtinstall
@@ -285,7 +285,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TAG: ${{ needs.guard.outputs.tag }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -301,4 +300,9 @@ jobs:
           ls -la
 
       - name: Create release
-        run: gh release create "$TAG" --title "Transparent $TAG" --notes "" release/*
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Transparent ${{ env.TAG }}
+          body: ""
+          files: release/*
