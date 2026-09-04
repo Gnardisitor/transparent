@@ -170,8 +170,8 @@ vcpkg. Qt 6 is installed manually (aqtinstall) or via the Qt online installer.
 ```bash
 brew install cmake ninja molten-vk
 pip install aqtinstall
-aqt install-qt mac desktop 6.8.3 clang_64 -O /opt/qt
-export PATH="/opt/qt/6.8.3/clang_64/bin:$PATH"
+aqt install-qt mac desktop 6.8.3 clang_64 -O "$HOME/qt"
+export PATH="$HOME/qt/6.8.3/macos/bin:$PATH"
 ```
 
 2. Clone the repository and init submodules (see Linux section).

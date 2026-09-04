@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   guard:
-    name: Guard (latest tag, matches CMake version)
+    name: Guard
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
@@ -69,7 +69,7 @@ jobs:
           echo "build=true" >> "$GITHUB_OUTPUT"
 
   linux:
-    name: Linux (AppImage)
+    name: Linux AppImage
     needs: guard
     if: needs.guard.outputs.build == 'true'
     runs-on: ubuntu-latest
@@ -88,22 +88,24 @@ jobs:
           sudo apt-get install -y \
             build-essential cmake ninja-build pkg-config \
             libvulkan-dev curl zip unzip tar file zsync \
-            breeze plasma-integration qt6-wayland
+            breeze plasma-integration qt6-wayland \
+            libgl1-mesa-dev libglx-dev libegl1-mesa-dev \
+            libfontconfig1-dev libxkbcommon-dev libdbus-1-dev
 
       - name: Cache Qt
         uses: actions/cache@v4
         id: qt-cache
         with:
-          path: /opt/qt
+          path: ~/qt
           key: qt-6.8.3-linux-gcc_64
 
       - name: Install Qt 6.8.3 (aqtinstall)
         if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
           pip install aqtinstall
-          aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O /opt/qt
+          aqt install-qt linux desktop 6.8.3 linux_gcc_64 -O "$HOME/qt"
       - name: Put Qt on PATH
-        run: echo "/opt/qt/6.8.3/gcc_64/bin" >> "$GITHUB_PATH"
+        run: echo "$HOME/qt/6.8.3/gcc_64/bin" >> "$GITHUB_PATH"
 
       - name: Cache vcpkg downloads
         uses: actions/cache@v4
@@ -159,12 +161,15 @@ jobs:
           path: dist/*
 
   windows:
-    name: Windows (installer)
+    name: Windows Installer
     needs: guard
     if: needs.guard.outputs.build == 'true'
     runs-on: windows-latest
     env:
       TAG: ${{ needs.guard.outputs.tag }}
+      # The app never links debug builds, and vcpkg builds debug+release on
+      # Windows by default. Halves the dependency build time.
+      VCPKG_BUILD_TYPE: release
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -239,7 +244,7 @@ jobs:
           path: dist/*
 
   macos:
-    name: macOS (Apple Silicon DMG)
+    name: macOS DMG
     needs: guard
     if: needs.guard.outputs.build == 'true'
     runs-on: macos-15
@@ -259,16 +264,16 @@ jobs:
         uses: actions/cache@v4
         id: qt-cache
         with:
-          path: /opt/qt
+          path: ~/qt
           key: qt-6.8.3-macos-clang_64
 
       - name: Install Qt 6.8.3 (aqtinstall)
         if: steps.qt-cache.outputs.cache-hit != 'true'
         run: |
           pip install aqtinstall
-          aqt install-qt mac desktop 6.8.3 clang_64 -O /opt/qt
+          aqt install-qt mac desktop 6.8.3 clang_64 -O "$HOME/qt"
       - name: Put Qt on PATH
-        run: echo "/opt/qt/6.8.3/clang_64/bin" >> "$GITHUB_PATH"
+        run: echo "$HOME/qt/6.8.3/macos/bin" >> "$GITHUB_PATH"
 
       - name: Cache vcpkg downloads
         uses: actions/cache@v4
@@ -302,7 +307,7 @@ jobs:
           path: build/dist/*
 
   release:
-    name: Publish GitHub release
+    name: Publish Release
     needs: [guard, linux, windows, macos]
     runs-on: ubuntu-latest
     env:

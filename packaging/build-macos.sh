@@ -15,7 +15,7 @@
 # Usage:
 #   ./packaging/build-macos.sh
 # Env overrides:
-#   QT_BIN       - dir containing macdeployqt (default /opt/qt/6.8.3/clang_64/bin)
+#   QT_BIN       - dir containing macdeployqt (default $HOME/qt/6.8.3/macos/bin)
 #   MOLTENVK_LIB - dir containing libMoltenVK.dylib (default $(brew --prefix)/lib)
 set -euo pipefail
 
@@ -24,7 +24,7 @@ build_dir="${repo_root}/build"
 dist_dir="${build_dir}/dist"
 app="${build_dir}/Transparent.app"
 
-qt_bin="${QT_BIN:-/opt/qt/6.8.3/clang_64/bin}"
+qt_bin="${QT_BIN:-$HOME/qt/6.8.3/macos/bin}"
 moltenvk_lib="${MOLTENVK_LIB:-$(brew --prefix)/lib}"
 arch="arm64"
 os_min="12.0"
