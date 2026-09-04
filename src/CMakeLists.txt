@@ -68,6 +68,13 @@ if(APPLE)
   endif()
 endif()
 
+# Keep the bundle/executable at the build root where packaging/build-macos.sh
+# and packaging/build-installer.ps1 expect it. Without this, CMake defaults to
+# the src/ subdirectory (and ggml's CMakeLists sets a directory-wide output
+# dir only in scopes that do not affect this target).
+set_target_properties(transparent PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 # AppImage packaging (packaging/build-appimage.sh) installs into an AppDir
 # using these same rules, following freedesktop's hicolor icon theme
 # convention so linuxdeploy picks the icon up automatically.

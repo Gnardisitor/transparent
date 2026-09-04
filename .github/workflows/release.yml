@@ -244,6 +244,9 @@ jobs:
     runs-on: macos-15
     env:
       TAG: ${{ needs.guard.outputs.tag }}
+      # Build vcpkg libs against the same minimum macOS version as the app,
+      # otherwise ld warns that dependency objects target a newer macOS.
+      VCPKG_OSX_DEPLOYMENT_TARGET: "13.3"
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -84,7 +84,7 @@ void TestMainWindow::everyModelCategoryStartsWithItsDefaultSelected() {
     pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Denoise")));
     pipeline->addStep(std::make_shared<NamedStep>(QStringLiteral("Upscale")));
 
-    ModelManager manager(QString()); // empty build defaults dir; fine for tests
+    ModelManager manager{QString()}; // empty build defaults dir; fine for tests
     MainWindow window(pipeline, std::make_shared<ModelManager>(QString()));
 
     const auto radios = window.findChildren<QRadioButton*>();
