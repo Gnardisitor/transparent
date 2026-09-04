@@ -25,9 +25,7 @@ plus a small built-in color quantizer.
 
 ## Releases
 
-Binaries for Windows (installer), Linux (AppImage), and macOS (Apple Silicon
-DMG) are published on the [GitHub mirror](https://github.com/dbajan/transparent)
-and built by CI from a version tag. All artifacts are unsigned.
+Binaries for Windows (installer), Linux (AppImage), and macOS (Apple Silicon DMG) are published on the [GitHub mirror](https://github.com/dbajan/transparent). All artifacts are unsigned.
 
 ## Building
 
@@ -154,10 +152,6 @@ powershell -ExecutionPolicy Bypass -File packaging\build-installer.ps1
 ```
 
 ### macOS (Apple Silicon only)
-
-Vulkan GPU acceleration runs through MoltenVK, fetched from Homebrew. The
-Vulkan loader and headers come from the vendored vcpkg, and the glslc shader
-compiler from Homebrew's shaderc. Qt 6 is installed manually (aqtinstall) or via the Qt online installer.
 
 1. Install system dependencies:
 

@@ -36,7 +36,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      - name: Check tag is newest and matches project version
+      - name: Check tag and project version
         id: check
         run: |
           set -euo pipefail
@@ -181,16 +181,21 @@ jobs:
         id: vulkan-sdk-cache
         with:
           path: C:\VulkanSDK
-          key: vulkan-sdk-windows
+          key: vulkan-sdk-1.4.357.0-windows
 
       - name: Install Vulkan SDK
         if: steps.vulkan-sdk-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
-          curl.exe -sL -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/latest/windows/vulkan-sdk.exe"
+          Write-Host "Downloading Vulkan SDK 1.4.357.0"
+          curl.exe --fail --retry 3 -L -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/1.4.357.0/windows/vulkan-sdk.exe"
+          if (-not (Test-Path "$env:RUNNER_TEMP\vulkan-sdk.exe")) { throw "SDK download failed" }
+          Write-Host "Installing (silent, takes a few minutes)..."
           Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList "/S" -Wait
+          if (-not (Test-Path "C:\VulkanSDK")) { throw "SDK installer ran but C:\VulkanSDK was not created" }
+          Write-Host "Vulkan SDK installed"
 
-      - name: Put glslc (Vulkan SDK) on PATH
+      - name: Put Vulkan SDK on PATH
         shell: pwsh
         run: |
           $sdk = (Get-ChildItem C:\VulkanSDK -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
