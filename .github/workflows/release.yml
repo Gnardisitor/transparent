@@ -176,30 +176,11 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
-      - name: Cache Vulkan SDK
-        uses: actions/cache@v4
-        id: vulkan-sdk-cache
+      - name: Install Vulkan SDK (extract only)
+        uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          path: C:\VulkanSDK
-          key: vulkan-sdk-1.4.357.0-windows
-
-      - name: Install Vulkan SDK
-        if: steps.vulkan-sdk-cache.outputs.cache-hit != 'true'
-        shell: pwsh
-        run: |
-          Write-Host "Downloading Vulkan SDK 1.4.357.0"
-          curl.exe --fail --retry 3 -L -o "$env:RUNNER_TEMP\vulkan-sdk.exe" "https://sdk.lunarg.com/sdk/download/1.4.357.0/windows/vulkan-sdk.exe"
-          if (-not (Test-Path "$env:RUNNER_TEMP\vulkan-sdk.exe")) { throw "SDK download failed" }
-          Write-Host "Installing."
-          Start-Process -FilePath "$env:RUNNER_TEMP\vulkan-sdk.exe" -ArgumentList "/S" -Wait
-          if (-not (Test-Path "C:\VulkanSDK")) { throw "SDK installer ran but C:\VulkanSDK was not created" }
-          Write-Host "Vulkan SDK installed"
-
-      - name: Put Vulkan SDK on PATH
-        shell: pwsh
-        run: |
-          $sdk = (Get-ChildItem C:\VulkanSDK -Directory | Sort-Object Name -Descending | Select-Object -First 1).FullName
-          Add-Content $env:GITHUB_ENV "PATH=$sdk\Bin;$env:PATH"
+          version: 1.4.357.0
+          cache: true
 
       - name: Cache vcpkg downloads
         uses: actions/cache@v4

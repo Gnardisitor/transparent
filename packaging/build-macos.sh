@@ -50,7 +50,11 @@ if [[ ! -x "${macdeployqt}" ]]; then
   exit 1
 fi
 
-rm -rf "${app}"
+# Note: no "rm -rf ${app}" before macdeployqt. The macOS volume is usually
+# case-insensitive, so Transparent.app and transparent.app are the same
+# directory there and the rm would delete the bundle we just built. mv below
+# renames it case-only; a stale bundle from an earlier run cannot coexist with
+# the raw one on the same volume.
 "${macdeployqt}" "${raw_bundle}" -verbose=1
 mv "${raw_bundle}" "${app}"
 
