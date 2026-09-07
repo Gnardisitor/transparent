@@ -47,13 +47,48 @@ Inherent GIF limitations (not bugs) are a 256-color-max palette shared across al
 
 - MIT-licensed, strong quality for salient object segmentation/matting.
 - Other models considered:
-  - RMBG-1.4/2.0 (BRIA): rejected, `bria-rmbg-1.4` license (source-available, non-commercial,
-    redistribution-restricted). IS-Net-family architecture, unsupported by vision.cpp. Users who
-    want it anyway can bring their own weights via the custom-model import (see Custom models); this project
-    never redistributes the weights.
+  - RMBG-1.4 (BRIA): rejected, `bria-rmbg-1.4` license (source-available, non-commercial,
+    redistribution-restricted) and IS-Net-family architecture, unsupported by vision.cpp.
+  - RMBG-2.0 (BRIA): same license family (gated, no redistribution), but *not* IS-Net — it is
+    BiRefNet (Swin-L) and converts with the fork's `convert.py birefnet` unchanged. Technically
+    trivial, rejected for license only; obtainable via the custom-model import (see Custom models);
+    this project never redistributes the weights.
   - MODNet: rejected, CC BY-NC-SA 4.0, non-commercial and portrait-specific.
   - IS-Net/U2Net: a viable fallback (Apache-2.0, smaller/faster) but visibly lower quality.
   - BEN2-base: MIT, a close alternative worth a look if BiRefNet-lite underperforms in practice.
+
+### Extra-models survey (`transparent-extra-models/`, 2026-09)
+
+Local weight stash next to the repo, checked against Hugging Face model cards and the vendored
+vision.cpp backends (`birefnet`, `scunet`, `esrgan` — the latter RRDB-only, plus `migan`,
+`depthanything`, `mobile-sam` unrelated here). Nothing from this survey was added to the
+models repo: every redistributable model lacks a working conversion, and the one converted
+model (RMBG-2.0) forbids redistribution.
+
+- RMBG-2.0: BiRefNet (Swin-L); converts with `convert.py birefnet` unchanged (verified: GGUF
+  loads, no key errors). `bria-rmbg-2.0` license forbids redistribution — stays in the stash,
+  usable locally via the custom-model import.
+- FeyNoBg (Feyn): BiRefNet with a deepened stage 3 (222M→263M params), Apache-2.0. The
+  redistribution-legal prize of the survey. Not convertible as-is: NoBg re-expressed the
+  backbone in timm style (`bb.swin.*`, `bb.hidden_states_norms.*`) instead of
+  `bb.layers.N.blocks.M`, so `convert.py` fails on its first line. Effort to support:
+  medium — a timm→BiRefNet key-mapping layer in the converter plus an inference test;
+  the C++ side auto-detects Swin params from the GGUF (`swin_detect_params`), so the
+  deepened stage may just work. Would slot into SegmentationModel with zero app changes.
+- BEN2 (PramaLLC): MIT. Custom "Background Erase Network" architecture (DINOv2-class
+  backbone + Confidence Guided Matting refiner), not BiRefNet. Effort: hard — new visp
+  architecture plus converter, same class of work as the SCUNet fork addition but larger.
+- NAFNet-SIDD width32/width64 (megvii): MIT, smartphone-image denoising. NAFNet
+  (activation-free U-Net) unsupported; would be a new denoise backend + converter. Most
+  tractable of the non-BiRefNet denoisers if a second denoiser is ever wanted.
+- Restormer gaussian_color_denoising_blind (swz30): MIT. Restormer transformer U-Net
+  unsupported; new backend needed, plus tiled inference for large images.
+- 4xNomos8kSCHAT-L (HAT-L) and 4xNomos8kDAT (DAT), both CC-BY-4.0, both 4x photo
+  upscalers: redistributable, but the visp `esrgan` backend only implements RRDB blocks.
+  HAT/DAT are heavy transformers; new backends would be slow and need tiling. Low priority.
+
+Priority if support work is ever taken up: FeyNoBg (afternoon, biggest win) → NAFNet →
+BEN2 → HAT/DAT.
 
 ### Model management (done)
 

@@ -36,6 +36,10 @@ QString bundledModelsDefaultsDir() {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Qt's own file dialog instead of the platform theme's: its KIO runtime
+    // cannot be carried in an AppImage. See git history for a portal attempt.
+    QCoreApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
+
     QApplication app(argc, argv);
     AppIdentity::init();
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/transparent.png")));

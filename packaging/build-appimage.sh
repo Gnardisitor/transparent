@@ -103,6 +103,7 @@ else
 fi
 
 wayland_platform="$(find "${qt_plugins_dir}/platforms" -maxdepth 1 -iname '*wayland*.so' 2>/dev/null | sort | head -n1)"
+
 if [[ -n "${wayland_platform}" ]]; then
   echo "Bundling Wayland platform support: ${wayland_platform}"
   bundle_args=()

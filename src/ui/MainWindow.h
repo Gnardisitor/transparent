@@ -45,7 +45,7 @@ public:
     void loadImage(const QString& path);
 
     // Absolute default path for the export dialog: Pictures (falling back
-    // to home) plus a name derived from `sourcePath` ("<source>_cutout", or
+    // to home) plus a name derived from `sourcePath` ("<source>_output", or
     // "output" without a source). Always absolute: a relative default
     // resolves against the process's cwd, which is arbitrary under AppImage
     // launches.

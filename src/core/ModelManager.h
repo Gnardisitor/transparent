@@ -25,8 +25,9 @@ struct ScannedModel {
 };
 
 // Owns the on-disk state behind model swapping: models live in
-// QStandardPaths::AppDataLocation (surviving rebuilds), installation state,
-// and on-demand downloads with checksum verification.
+// <GenericDataLocation>/<applicationName>/models, e.g.
+// ~/.local/share/transparent on Linux (surviving rebuilds), installation
+// state, and on-demand downloads with checksum verification.
 class ModelManager : public QObject {
     Q_OBJECT
 

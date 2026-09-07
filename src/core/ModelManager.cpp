@@ -1,6 +1,7 @@
 #include "ModelManager.h"
 
 #include <QCryptographicHash>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -21,7 +22,10 @@ ModelManager::ModelManager(QString buildDefaultsDir, QObject* parent)
 }
 
 QString ModelManager::modelsDir() const {
-    const QString base = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    // Hand-built, not AppDataLocation: that enum hardcodes an <org>/<app>
+    // nesting on Unix. The org name stays set for QSettings.
+    const QString base = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
+                         QLatin1Char('/') + QCoreApplication::applicationName();
     const QString dir = base + QStringLiteral("/models");
     QDir().mkpath(dir);
     return dir;

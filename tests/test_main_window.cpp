@@ -229,7 +229,7 @@ void TestMainWindow::defaultExportPathIsAbsoluteAndDerivedFromTheSourceName() {
                                                          QStringLiteral(".png"));
 
     QVERIFY(QFileInfo(path).isAbsolute());
-    QVERIFY(path.endsWith(QStringLiteral("vacation_cutout.png")));
+    QVERIFY(path.endsWith(QStringLiteral("vacation_output.png")));
 }
 
 void TestMainWindow::defaultExportPathFallsBackToOutputWithoutASource() {

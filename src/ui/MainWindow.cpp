@@ -970,7 +970,7 @@ QString MainWindow::defaultExportPath(const QString& sourcePath, const QString& 
     if (!sourcePath.isEmpty()) {
         const QString base = QFileInfo(sourcePath).completeBaseName();
         if (!base.isEmpty()) {
-            name = base + QStringLiteral("_cutout");
+            name = base + QStringLiteral("_output");
         }
     }
     QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
