@@ -189,13 +189,15 @@ Three defaults are downloaded and checksum-verified at configure time, and copie
 | Denoise | [SCUNet](https://github.com/cszn/SCUNet) color real GAN | Apache-2.0 | [transparent-models](https://forge.db-serve.com/dbajan/transparent-models) |
 | Upscale | Real-ESRGAN `foolhardy_Remacri` | BSD-3-Clause | [Acly/Real-ESRGAN-GGUF](https://huggingface.co/Acly/Real-ESRGAN-GGUF) |
 
-More models are available to available to install in the settings tab. Custom converted models can be added using the `Add model from disk` button or from being added into the models folder. Only `birefnet`, `scunet`, and `esrgan` as currently supported.
+More models are available to install in the settings tab, including FeyNoBg and BiRefNet-dynamic for background removal. Custom converted models can be added using the `Add model from disk` button or by placing them in the models folder. Only `birefnet`, `scunet`, and `esrgan` are currently supported.
 
 To convert your own checkpoints for a supported architecture, use [scripts/convert.py](https://forge.db-serve.com/dbajan/vision.cpp/blob/main/scripts/convert.py) in the vision.cpp fork. It supports the same architectures and produces F16 GGUF files, for example:
 
 ```bash
 uv run python scripts/convert.py esrgan 4x-UltraSharp.pth -q f16 -o models/
 ```
+
+The `birefnet` converter also accepts the HF/timm-style checkpoints published by [NoBg](https://github.com/feyninc/nobg), such as FeyNoBg.
 
 ## License
 

@@ -61,20 +61,21 @@ Inherent GIF limitations (not bugs) are a 256-color-max palette shared across al
 
 Local weight stash next to the repo, checked against Hugging Face model cards and the vendored
 vision.cpp backends (`birefnet`, `scunet`, `esrgan` — the latter RRDB-only, plus `migan`,
-`depthanything`, `mobile-sam` unrelated here). Nothing from this survey was added to the
-models repo: every redistributable model lacks a working conversion, and the one converted
-model (RMBG-2.0) forbids redistribution.
+`depthanything`, `mobile-sam` unrelated here). FeyNoBg has since been added to the models repo
+(see below). Everything else from this survey is still stash-only.
 
 - RMBG-2.0: BiRefNet (Swin-L); converts with `convert.py birefnet` unchanged (verified: GGUF
   loads, no key errors). `bria-rmbg-2.0` license forbids redistribution — stays in the stash,
   usable locally via the custom-model import.
-- FeyNoBg (Feyn): BiRefNet with a deepened stage 3 (222M→263M params), Apache-2.0. The
-  redistribution-legal prize of the survey. Not convertible as-is: NoBg re-expressed the
-  backbone in timm style (`bb.swin.*`, `bb.hidden_states_norms.*`) instead of
-  `bb.layers.N.blocks.M`, so `convert.py` fails on its first line. Effort to support:
-  medium — a timm→BiRefNet key-mapping layer in the converter plus an inference test;
-  the C++ side auto-detects Swin params from the GGUF (`swin_detect_params`), so the
-  deepened stage may just work. Would slot into SegmentationModel with zero app changes.
+- FeyNoBg (Feyn): BiRefNet with a deepened stage 3 (222M→263M params), Apache-2.0. **Done.**
+  NoBg re-expressed the model in HF style (`bb.swin.*` backbone keys, 0-indexed ModuleList
+  decoder running deepest-first), so the fork's `convert.py birefnet` gained a key-mapping
+  layer (q/k/v fusion into the fused `attn.qkv`, ModuleList index inversion, timm norm names)
+  plus a `swin.depths` GGUF metadata entry that `swin_detect_params` reads to pick up the
+  2-2-24-2 stage depths. Verified on GPU (RX 9070 XT) and CPU. Output is consistent with
+  BiRefNet-lite's on the same images. Hosted as `FeyNoBg-F16.gguf` in transparent-models and
+  downloadable from the Settings model catalog. Loads through the existing SegmentationModel
+  seam, no app changes.
 - BEN2 (PramaLLC): MIT. Custom "Background Erase Network" architecture (DINOv2-class
   backbone + Confidence Guided Matting refiner), not BiRefNet. Effort: hard — new visp
   architecture plus converter, same class of work as the SCUNet fork addition but larger.
@@ -87,8 +88,7 @@ model (RMBG-2.0) forbids redistribution.
   upscalers: redistributable, but the visp `esrgan` backend only implements RRDB blocks.
   HAT/DAT are heavy transformers; new backends would be slow and need tiling. Low priority.
 
-Priority if support work is ever taken up: FeyNoBg (afternoon, biggest win) → NAFNet →
-BEN2 → HAT/DAT.
+Priority if support work is ever taken up: ~~FeyNoBg (done)~~ → NAFNet → BEN2 → HAT/DAT.
 
 ### Model management (done)
 

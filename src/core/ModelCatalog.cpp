@@ -24,6 +24,11 @@ const std::vector<ModelInfo>& catalog() {
          QStringLiteral("BiRefNet-F16.gguf"), QStringLiteral("MIT"), 440'372'864,
          QStringLiteral("https://huggingface.co/Acly/BiRefNet-GGUF/resolve/main/BiRefNet-F16.gguf"),
          QStringLiteral("5d5fd824c8fb2c1a65fc4345458b2e78777d949418385ea7bba5a9f104364d77")},
+        {ModelCategory::Segmentation, QStringLiteral("FeyNoBg"),
+         QStringLiteral("FeyNoBg-F16.gguf"), QStringLiteral("Apache-2.0"), 525'591'648,
+         QStringLiteral("https://forge.db-serve.com/dbajan/transparent-models/media/branch/main/"
+                         "FeyNoBg-F16.gguf"),
+         QStringLiteral("110854aec5f093a630b31722b5d633d132bc1f4233a1976d80c304df9a566f89")},
         {ModelCategory::Upscale, QStringLiteral("foolhardy_Remacri"),
          QStringLiteral("ESRGAN-4x-foolhardy_Remacri-F16.gguf"), QStringLiteral("BSD-3-Clause"),
          33'451'392,
